@@ -51,7 +51,7 @@ const audioLevels = {
 
 // Start audio on first user input
 function startAudioIfNeeded() {
-    // Enable all audio files for mobile by playing then pausing
+    // Enable all audio files for mobile by playing then pausing (but prevent cacophony)
     const audioFiles = [
         backgroundMusic, forestMusic, carSound, religionAudio, 
         catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, 
@@ -60,13 +60,23 @@ function startAudioIfNeeded() {
     
     audioFiles.forEach(audio => {
         if (audio && audio.paused) {
+            // Store original volume and set to 0 to prevent sound during enable
+            const originalVolume = audio.volume;
+            audio.volume = 0;
+            
             audio.play().then(() => {
                 // Only pause if it's not background music or car sound (they should keep playing)
                 if (audio !== backgroundMusic && audio !== carSound) {
                     audio.pause();
                     audio.currentTime = 0;
                 }
-            }).catch(err => console.log('Audio enable error:', err));
+                // Restore original volume
+                audio.volume = originalVolume;
+            }).catch(err => {
+                console.log('Audio enable error:', err);
+                // Restore volume even on error
+                audio.volume = originalVolume;
+            });
         }
     });
     
