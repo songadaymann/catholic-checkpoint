@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connor and the Catholic Checkpoint</title>
+    <link rel="stylesheet" href="https://use.typekit.net/tjz6yjr.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameContainer {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #gameCanvas {
+            width: 56.25vh; /* 9:16 aspect ratio (9/16 * 100vh) */
+            height: 100vh;
+            max-width: 100vw;
+            max-height: 177.78vw; /* 16:9 aspect ratio (16/9 * 100vw) */
+            border: none;
+            display: block;
+        }
+        
+        @media (max-width: 600px) {
+            #gameCanvas {
+                width: 100vw;
+                height: 177.78vw;
+                max-height: 100vh;
+                max-width: 56.25vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
