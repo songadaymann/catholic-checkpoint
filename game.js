@@ -288,6 +288,9 @@ async function startAudioIfNeeded() {
             volumeCategory: 'carSound' 
         });
         
+        // CRITICAL: Prime videos for mobile DURING user interaction
+        primeVideosForMobile();
+        
         // For mobile: Don't connect videos to Web Audio, let them handle their own audio
         if (!isMobileDevice) {
             // Desktop only: Connect videos to Web Audio
@@ -339,6 +342,39 @@ function unlockiOSAudio() {
     }
     
     console.log('iOS audio unlock attempted');
+}
+
+// Add this new function to prime videos for iOS
+function primeVideosForMobile() {
+    if (!isMobileDevice) return;
+    
+    console.log('Priming videos for mobile playback...');
+    
+    videos.forEach((video, index) => {
+        // Ensure all iOS attributes are set
+        video.muted = true;
+        video.playsInline = true;
+        video.setAttribute('muted', 'true');
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        
+        // CRITICAL: Call load() to prime the video
+        video.load();
+        
+        // Try to play and immediately pause to prime for later playback
+        const primePromise = video.play();
+        if (primePromise !== undefined) {
+            primePromise.then(() => {
+                // Immediately pause after starting
+                video.pause();
+                video.currentTime = 0;
+                console.log(`Video ${index + 1} primed successfully`);
+            }).catch(err => {
+                console.log(`Video ${index + 1} prime failed:`, err);
+                // Even if it fails, the load() should help
+            });
+        }
+    });
 }
 
 // Crossfade from background music to forest music over longer period
@@ -1323,10 +1359,26 @@ function checkVideoProximity() {
                     console.log(`Video ${index + 1} finished - marked as played`);
                 }, { once: true });
                 
-                // CRITICAL MOBILE FIX: Ensure video is muted before playing on mobile
+                // CRITICAL MOBILE FIX: Triple-check video is muted before playing
                 if (isMobileDevice) {
-                    video.muted = true; // Ensure it's muted
-                    video.setAttribute('playsinline', 'true'); // Ensure inline playback
+                    // Reset video to ensure clean state
+                    video.pause();
+                    video.currentTime = 0;
+                    
+                    // Force muted state in every possible way
+                    video.muted = true;
+                    video.defaultMuted = true;
+                    video.setAttribute('muted', 'true');
+                    video.setAttribute('playsinline', 'true');
+                    video.setAttribute('webkit-playsinline', 'true');
+                    
+                    // Log current state
+                    console.log(`Video ${index + 1} pre-play state:`, {
+                        muted: video.muted,
+                        defaultMuted: video.defaultMuted,
+                        hasAttribute: video.hasAttribute('muted'),
+                        readyState: video.readyState
+                    });
                 }
                 
                 // Try to play video
@@ -1335,40 +1387,24 @@ function checkVideoProximity() {
                     console.log(`Video ${index + 1} started playing successfully`);
                     
                     // MOBILE ONLY: Unmute after playback starts
-                    if (isMobileDevice && video.muted) {
+                    if (isMobileDevice) {
                         setTimeout(() => {
                             video.muted = false;
-                            // Set volume directly since we're not using Web Audio for mobile videos
-                            video.volume = 0.9; // Use the mobile video volume
+                            video.volume = 0.9;
                             console.log(`Mobile: Video ${index + 1} unmuted, volume set to ${video.volume}`);
-                        }, 150); // Slightly longer delay for iOS
+                        }, 200); // Slightly longer delay
                     }
                 }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
-                    console.log(`Video ${index + 1} state - muted: ${video.muted}, readyState: ${video.readyState}`);
+                    console.log(`Video ${index + 1} error details:`, {
+                        error: err.name,
+                        message: err.message,
+                        muted: video.muted,
+                        readyState: video.readyState,
+                        networkState: video.networkState
+                    });
                     
-                    // MOBILE FALLBACK: If autoplay fails, try on next interaction
-                    if (isMobileDevice) {
-                        const playOnInteraction = () => {
-                            if (!videosPlayed[index] && video.paused) {
-                                video.muted = true; // Ensure muted for retry
-                                video.play().then(() => {
-                                    console.log(`Mobile: Video ${index + 1} started after user interaction`);
-                                    setTimeout(() => {
-                                        video.muted = false;
-                                        video.volume = 0.9;
-                                    }, 150);
-                                }).catch(e => console.error('Video still failed:', e));
-                            }
-                            // Remove listeners after attempt
-                            document.removeEventListener('touchstart', playOnInteraction);
-                            document.removeEventListener('click', playOnInteraction);
-                        };
-                        
-                        // Add interaction listeners for retry
-                        document.addEventListener('touchstart', playOnInteraction, { once: true });
-                        document.addEventListener('click', playOnInteraction, { once: true });
-                    }
+                    // Don't add fallback listeners - we've primed the videos already
                 });
             }
         }
