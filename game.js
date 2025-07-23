@@ -236,6 +236,31 @@ let correctDenomination = null; // Will be set when denominations are shown
 let isWinning = false; // Track if player is in win state
 let winStartZ = null; // Z position when win sequence started
 
+// Subtitle system
+let subtitleOverlay = null;
+let currentSubtitleSource = null; // Track which video/audio is showing subtitle
+const videoSubtitles = {
+    0: "So, you don't believe in Democracy?",
+    1: "No, I don't. Absolutely not.",
+    2: "What do you believe in?\nAutocracy.",
+    3: "By who?",
+    4: "Anyone who is in line\nwith Catholic teaching.",
+    5: "And if that autocrat kills you\nand your family, you're fine with that?",
+    6: "I'm not going to be part of\nthe group that he kills!",
+    7: "You're a *little* bit more\nthan a far right Republican",
+    8: "Hey, what can I say?",
+    9: "I think you could say,\n\"I'm a fascist!\"",
+    10: "Yeah, I am!",
+    11: "*laughs maniacally*"
+};
+
+const audioSubtitles = {
+    'religionAudio': "State your religion!",
+    'catholicAudio': "I'm a Catholic!",
+    'whatKindAudio': "What *kind* of Catholic?",
+    'goAheadAudio': "All right, brother, go ahead."
+};
+
 // Add frame-rate independent movement variables
 let lastFrameTime = 0;
 let deltaTime = 0;
@@ -356,6 +381,53 @@ function unlockiOSAudio() {
     }
     
     console.log('iOS audio unlock attempted');
+}
+
+// Create subtitle overlay
+function createSubtitleOverlay() {
+    subtitleOverlay = document.createElement('div');
+    subtitleOverlay.id = 'subtitle-overlay';
+    subtitleOverlay.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-family: Arial, sans-serif;
+        font-size: 18px;
+        font-weight: bold;
+        text-align: center;
+        z-index: 1000;
+        max-width: 80%;
+        white-space: pre-line;
+        display: none;
+    `;
+    document.body.appendChild(subtitleOverlay);
+    console.log('Subtitle overlay created');
+}
+
+// Show subtitle text
+function showSubtitle(text, source) {
+    if (!subtitleOverlay) return;
+    subtitleOverlay.textContent = text;
+    subtitleOverlay.style.display = 'block';
+    currentSubtitleSource = source;
+    console.log('Showing subtitle:', text, 'from source:', source);
+}
+
+// Hide subtitle only if from the correct source
+function hideSubtitle(source) {
+    if (!subtitleOverlay) return;
+    if (source && currentSubtitleSource !== source) {
+        console.log('Not hiding subtitle - wrong source. Current:', currentSubtitleSource, 'Requested:', source);
+        return;
+    }
+    subtitleOverlay.style.display = 'none';
+    currentSubtitleSource = null;
+    console.log('Hiding subtitle from source:', source);
 }
 
 // Add this new function to prime videos for iOS
@@ -552,6 +624,7 @@ function loadSpriteData() {
             playthroughCount = 1;
             createVideoSystem();
             createAudioSystem();
+            createSubtitleOverlay();
         
             createCarInterior();
             gameStartTime = Date.now();
@@ -1394,6 +1467,7 @@ function checkVideoProximity() {
                 // Add ended listener
                 video.addEventListener('ended', () => {
                     videosPlayed[index] = true;
+                    hideSubtitle(`video-${index}`); // Hide subtitle when video ends
                     console.log(`Video ${index + 1} finished - marked as played`);
                 }, { once: true });
                 
@@ -1423,6 +1497,37 @@ function checkVideoProximity() {
                 console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
                 video.play().then(() => {
                     console.log(`Video ${index + 1} started playing successfully`);
+                    
+                    // Show subtitle for this video based on playthrough
+                    let subtitleText = null;
+                    
+                    // Determine which subtitle to show based on playthrough count
+                    if (playthroughCount % 2 === 1) {
+                        // Odd playthroughs: videos 1-7 (indices 0-6)
+                        subtitleText = videoSubtitles[index];
+                    } else {
+                        // Even playthroughs: videos 8-12 + 6-7 (indices 0-4 use 7-11, indices 5-6 use 5-6)
+                        if (index <= 4) {
+                            subtitleText = videoSubtitles[index + 7]; // Maps 0-4 to 7-11
+                        } else {
+                            subtitleText = videoSubtitles[index]; // Maps 5-6 to 5-6 (same as odd)
+                        }
+                    }
+                    
+                    if (subtitleText) {
+                        // Special case for video 2 in odd playthroughs - two speakers, show sequentially
+                        if (index === 2 && playthroughCount % 2 === 1) {
+                            showSubtitle("What do you believe in?", `video-${index}`);
+                            setTimeout(() => {
+                                // Only show second line if this video is still the current source
+                                if (currentSubtitleSource === `video-${index}`) {
+                                    showSubtitle("Autocracy.", `video-${index}`);
+                                }
+                            }, 1000); // 1 second delay
+                        } else {
+                            showSubtitle(subtitleText, `video-${index}`);
+                        }
+                    }
                     
                     // MOBILE ONLY: Unmute after playback starts
                     if (isMobileDevice) {
@@ -1526,11 +1631,17 @@ function startDialogueSequence() {
         volumeCategory: 'dialogueAudio',
         onEnded: () => {
             stopMouthAnimation();
+            hideSubtitle('religionAudio');
             setTimeout(() => {
                 showReligionChoices();
             }, 500);
         }
     });
+    
+    // Show subtitle for religion audio
+    if (audioSubtitles['religionAudio']) {
+        showSubtitle(audioSubtitles['religionAudio'], 'religionAudio');
+    }
 }
 
 // Start mouth animation (toggle between leaning1 and leaning2)
@@ -1648,20 +1759,32 @@ function selectReligionChoice(choice) {
         audioManager.play('catholicAudio', {
             volumeCategory: 'dialogueAudio',
             onEnded: () => {
+                hideSubtitle('catholicAudio');
                 setTimeout(() => {
                     startMouthAnimation();
                     audioManager.play('whatKindAudio', {
                         volumeCategory: 'dialogueAudio',
                         onEnded: () => {
                             stopMouthAnimation();
+                            hideSubtitle('whatKindAudio');
                             setTimeout(() => {
                                 showDenominationList();
                             }, 500);
                         }
                     });
+                    
+                    // Show subtitle for what kind audio
+                    if (audioSubtitles['whatKindAudio']) {
+                        showSubtitle(audioSubtitles['whatKindAudio'], 'whatKindAudio');
+                    }
                 }, 300);
             }
         });
+        
+        // Show subtitle for catholic audio
+        if (audioSubtitles['catholicAudio']) {
+            showSubtitle(audioSubtitles['catholicAudio'], 'catholicAudio');
+        }
     }, 300);
 }
 
@@ -1870,6 +1993,11 @@ function startWinSequence() {
     
     // Play "go ahead" audio
     audioManager.play('goAheadAudio', { volumeCategory: 'dialogueAudio' });
+    
+    // Show subtitle for go ahead audio
+    if (audioSubtitles['goAheadAudio']) {
+        showSubtitle(audioSubtitles['goAheadAudio'], 'goAheadAudio');
+    }
     
     // Change gatehouse to open gate
     if (gatehouseSprite) {
