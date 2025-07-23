@@ -22,12 +22,19 @@ class AudioManager {
         if (this.isInitialized) return;
         
         try {
-            // Create audio context
+            // Create audio context - use user activation if needed
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             
-            // Resume context if suspended (required by some browsers)
+            // Ensure context starts on iOS - this is crucial
             if (this.audioContext.state === 'suspended') {
+                console.log('Audio context suspended, attempting to resume...');
                 await this.audioContext.resume();
+                console.log('Audio context resumed, state:', this.audioContext.state);
+            }
+            
+            // Double-check context is running
+            if (this.audioContext.state !== 'running') {
+                console.warn('Audio context not running:', this.audioContext.state);
             }
             
             // Create master gain node
@@ -36,6 +43,7 @@ class AudioManager {
             
             this.isInitialized = true;
             console.log('Web Audio API initialized successfully');
+            console.log('Audio context state:', this.audioContext.state);
             console.log('Audio levels:', this.audioLevels);
             
         } catch (error) {
@@ -147,10 +155,19 @@ class AudioManager {
     }
     
     connectVideoElement(videoElement, volumeCategory = 'videoAudio') {
+        // Skip Web Audio connection on mobile to avoid playback issues
+        if (isMobileDevice) {
+            // Set volume directly on video element for mobile
+            const volume = this.audioLevels[volumeCategory] || 1.0;
+            videoElement.volume = volume;
+            console.log(`Video volume set directly to ${volume} (mobile fallback)`);
+            return null;
+        }
+        
         if (!this.isInitialized) return null;
         
         try {
-            // Create media element source
+            // Create media element source (desktop only)
             const source = this.audioContext.createMediaElementSource(videoElement);
             const gainNode = this.audioContext.createGain();
             
@@ -250,6 +267,14 @@ async function startAudioIfNeeded() {
         
         console.log('All audio loaded successfully');
         
+        // Check if audio context is actually running before playing
+        if (audioManager.audioContext.state !== 'running') {
+            console.warn('Audio context not running when trying to play audio:', audioManager.audioContext.state);
+            // Try to resume again
+            await audioManager.audioContext.resume();
+            console.log('Audio context state after second resume attempt:', audioManager.audioContext.state);
+        }
+        
         // Start background music
         audioManager.play('backgroundMusic', { 
             loop: true, 
@@ -262,11 +287,15 @@ async function startAudioIfNeeded() {
             volumeCategory: 'carSound' 
         });
         
-        // Connect all video elements to Web Audio
+        // Connect all video elements to Web Audio (desktop) or set volume directly (mobile)
         videos.forEach((video, index) => {
             if (video) {
                 audioManager.connectVideoElement(video, 'videoAudio');
-                console.log(`Video ${index + 1} connected to Web Audio API`);
+                if (isMobileDevice) {
+                    console.log(`Video ${index + 1} volume set directly (mobile)`);
+                } else {
+                    console.log(`Video ${index + 1} connected to Web Audio API`);
+                }
             }
         });
         
@@ -663,6 +692,7 @@ function createVideoSystem() {
         video.src = `videos/${filename}`;
         video.preload = 'metadata';
         video.muted = false; // Enable audio playback
+        video.volume = isMobileDevice ? 0.9 : 0.8; // Set initial volume
         video.crossOrigin = 'anonymous';
         video.autoplay = false; // Explicitly prevent autoplay
         video.loop = false;
