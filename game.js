@@ -268,6 +268,7 @@ async function startAudioIfNeeded() {
         console.log('Audio context state after init:', audioManager.audioContext.state);
         
         // Load all audio files
+        console.log('Starting to load audio files...');
         await Promise.all([
             audioManager.loadAudio('backgroundMusic', 'audio/ride-of-the-nazi-soy-boy.mp3'),
             audioManager.loadAudio('forestMusic', 'audio/forest.mp3'),
@@ -280,15 +281,20 @@ async function startAudioIfNeeded() {
             audioManager.loadAudio('gunshotAudio', 'audio/gunshot.mp3'),
             audioManager.loadAudio('ringingAudio', 'audio/ringing.mp3'),
             audioManager.loadAudio('footstepsAudio', 'audio/footsteps.mp3')
-        ]);
+        ]).catch(err => {
+            console.error('Error loading audio files:', err);
+            throw err;
+        });
         
         console.log('All audio loaded successfully');
         
         // Start background music with Web Audio
-        audioManager.play('backgroundMusic', { 
+        console.log('Attempting to start background music...');
+        const result = audioManager.play('backgroundMusic', { 
             loop: true, 
             volumeCategory: 'backgroundMusic' 
         });
+        console.log('Background music play result:', result);
         
         // Start car sound with Web Audio
         audioManager.play('carSound', { 
