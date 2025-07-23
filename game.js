@@ -56,10 +56,10 @@ const audioLevels = isMobileDevice ? {
     videoAudio: 0.8         // Louder video dialogue on mobile
 } : {
     // Desktop audio levels
-    backgroundMusic: 0.03,  // Background music volume (0.0 to 1.0)
-    forestMusic: 0.05,     // Forest music volume for gatehouse scene
-    carSound: 0.2,         // Car engine sound volume
-    videoAudio: 0.6        // Video dialogue volume
+    backgroundMusic: 0.015,  // Background music volume (0.0 to 1.0)
+    forestMusic: .025,     // Forest music volume for gatehouse scene
+    carSound: 0.1,         // Car engine sound volume
+    videoAudio: 0.8        // Video dialogue volume
 };
 
 // Start audio on first user input
@@ -74,30 +74,48 @@ function startAudioIfNeeded() {
         gunshotAudio, ringingAudio, footstepsAudio
     ];
     
-    // Handle non-continuous audio files
+    // Handle non-continuous audio files - make sure they're muted during initialization
     audioFiles.forEach(audio => {
         if (audio && audio.paused) {
             const originalVolume = audio.volume;
             audio.volume = 0;
+            audio.muted = true; // Ensure muted during initialization
             
             audio.play().then(() => {
                 audio.pause();
                 audio.currentTime = 0;
+                audio.muted = false; // Unmute after pausing
                 audio.volume = originalVolume;
             }).catch(err => {
                 console.log('Audio enable error:', err);
+                audio.muted = false;
                 audio.volume = originalVolume;
             });
         }
     });
     
-    // Handle continuous audio (background music and car sound) separately
+    // Handle background music (should play) but NOT car sound yet
     if (backgroundMusic && backgroundMusic.paused) {
         backgroundMusic.play().catch(err => console.log('Background music error:', err));
     }
     
+    // Initialize car sound but don't play it yet - it should only play when moving
     if (carSound && carSound.paused) {
-        carSound.play().catch(err => console.log('Car sound error:', err));
+        const originalVolume = carSound.volume;
+        carSound.volume = 0;
+        carSound.muted = true;
+        
+        carSound.play().then(() => {
+            carSound.pause();
+            carSound.currentTime = 0;
+            carSound.muted = false;
+            carSound.volume = originalVolume;
+            console.log('Car sound initialized but not playing');
+        }).catch(err => {
+            console.log('Car sound initialization error:', err);
+            carSound.muted = false;
+            carSound.volume = originalVolume;
+        });
     }
     
     // Enable all video elements for mobile only
@@ -1063,7 +1081,15 @@ function handleInput() {
         const baseHeight = 2.15; // Match your camera height setting
         camera.position.y = baseHeight + Math.sin(Date.now() * 0.01 * speed) * 0.001; // Much smaller bob
         
-        // Car sound plays continuously once started
+        // Car sound plays when moving
+        if (carSound && carSound.paused) {
+            carSound.play().catch(err => console.log('Car sound play error:', err));
+        }
+    } else {
+        // Stop car sound when not moving
+        if (carSound && !carSound.paused) {
+            carSound.pause();
+        }
     }
 }
 
