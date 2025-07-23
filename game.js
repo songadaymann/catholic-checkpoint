@@ -199,8 +199,8 @@ let road, grass, sky;
 let roadTexture, grassTexture, skyTexture;
 let treesTexture, grassSpritesTexture;
 let carInteriorCTexture, carInteriorLTexture, carInteriorRTexture;
-let gatehouseTexture;
-let soldierStopTexture, soldierCasualTexture, soldierAimingTexture, soldierLeaning1Texture, soldierLeaning2Texture, soldierAiming2Texture;
+let gatehouseTexture, gatehouseOpenTexture;
+let soldierStopTexture, soldierCasualTexture, soldierAimingTexture, soldierLeaning1Texture, soldierLeaning2Texture, soldierAiming2Texture, soldierLeaning3Texture;
 let treesData, grassSpritesData;
 let sprites = [];
 let carInterior;
@@ -218,6 +218,7 @@ let dialogueStarted = false; // Track if dialogue sequence has started
 let mouthAnimationInterval = null; // For toggling mouth animation
 let showingDenominations = false; // Track if showing denomination list
 let allSoldiers = []; // Store references to all soldier sprites
+let gatehouseSprite = null; // Store reference to gatehouse for win sequence
 let muzzleFlash = null; // Muzzle flash sprite for gunshot effect
 let instructionsShown = false; // Track if initial instructions have been shown
 
@@ -228,6 +229,12 @@ let videoPositions = []; // Will store Z positions for each video
 let videosPlayed = []; // Track which videos have already been played
 let videoProximities = []; // Trigger distances for each video
 let playthroughCount = 0; // Track which playthrough we're on for video patterns
+
+// Win state variables
+const DEBUG_WIN_STATE = false; // Set to true to always make "Apostolic Catholic Church" correct
+let correctDenomination = null; // Will be set when denominations are shown
+let isWinning = false; // Track if player is in win state
+let winStartZ = null; // Z position when win sequence started
 
 // Add frame-rate independent movement variables
 let lastFrameTime = 0;
@@ -269,6 +276,7 @@ async function startAudioIfNeeded() {
             audioManager.loadAudio('catholicAudio', "audio/i'm-a-catholic.mp3"),
             audioManager.loadAudio('whatKindAudio', 'audio/what-kind.mp3'),
             audioManager.loadAudio('wrongAudio', 'audio/wrong.mp3'),
+            audioManager.loadAudio('goAheadAudio', 'audio/goahead.mp3'),
             audioManager.loadAudio('gunshotAudio', 'audio/gunshot.mp3'),
             audioManager.loadAudio('ringingAudio', 'audio/ringing.mp3'),
             audioManager.loadAudio('footstepsAudio', 'audio/footsteps.mp3')
@@ -379,9 +387,18 @@ function primeVideosForMobile() {
 
 // Crossfade from background music to forest music over longer period
 function startMusicCrossfade() {
-    if (!audioManager || crossfadeStarted) return;
+    if (!audioManager) {
+        console.log('Cannot start crossfade: audioManager not available');
+        return;
+    }
+    
+    if (crossfadeStarted) {
+        console.log('Crossfade already started, skipping');
+        return;
+    }
     
     crossfadeStarted = true;
+    console.log('Starting music crossfade: background -> forest');
     
     // Start forest music at 0 volume
     audioManager.play('forestMusic', { 
@@ -462,7 +479,7 @@ function init() {
 function loadTextures() {
     const loader = new THREE.TextureLoader();
     let texturesLoaded = 0;
-    const totalTextures = 15; // Added sprite sheets + 3 car interior panels + gatehouse + 6 soldiers
+    const totalTextures = 17; // Added sprite sheets + 3 car interior panels + 2 gatehouse + 7 soldiers
 
     function onTextureLoad() {
         texturesLoaded++;
@@ -498,16 +515,18 @@ function loadTextures() {
     carInteriorLTexture = loader.load('sprites/car-interiorL.webp', onTextureLoad);
     carInteriorRTexture = loader.load('sprites/car-interiorR.webp', onTextureLoad);
     
-    // Load gatehouse texture
-    gatehouseTexture = loader.load('sprites/gatehouse.webp', onTextureLoad);
-    
-    // Load soldier textures
-    soldierStopTexture = loader.load('sprites/soldiers/soldier-stop1.webp', onTextureLoad);
-    soldierCasualTexture = loader.load('sprites/soldiers/soldier-casual1.webp', onTextureLoad);
-    soldierAimingTexture = loader.load('sprites/soldiers/soldier-aiming.webp', onTextureLoad);
-    soldierLeaning1Texture = loader.load('sprites/soldiers/soldier-leaning1.webp', onTextureLoad);
-    soldierLeaning2Texture = loader.load('sprites/soldiers/soldier-leaning2.webp', onTextureLoad);
-    soldierAiming2Texture = loader.load('sprites/soldiers/soldier-aiming.webp', onTextureLoad);
+    // Load gatehouse textures
+gatehouseTexture = loader.load('sprites/gatehouse.webp', onTextureLoad);
+gatehouseOpenTexture = loader.load('sprites/gatehouse1.webp', onTextureLoad);
+
+// Load soldier textures
+soldierStopTexture = loader.load('sprites/soldiers/soldier-stop1.webp', onTextureLoad);
+soldierCasualTexture = loader.load('sprites/soldiers/soldier-casual1.webp', onTextureLoad);
+soldierAimingTexture = loader.load('sprites/soldiers/soldier-aiming.webp', onTextureLoad);
+soldierLeaning1Texture = loader.load('sprites/soldiers/soldier-leaning1.webp', onTextureLoad);
+soldierLeaning2Texture = loader.load('sprites/soldiers/soldier-leaning2.webp', onTextureLoad);
+soldierAiming2Texture = loader.load('sprites/soldiers/soldier-aiming.webp', onTextureLoad);
+soldierLeaning3Texture = loader.load('sprites/soldiers/soldier-leaning3.webp', onTextureLoad);
 }
 
 // Load sprite JSON data
@@ -834,11 +853,11 @@ function createGatehouse() {
         alphaTest: 0.1
     });
     
-    const gatehouse = new THREE.Mesh(gatehouseGeometry, gatehouseMaterial);
-    gatehouse.position.set(-5, 5, -300); // Left side of road at clearing
-    gatehouse.rotation.y = 0; // Face forward
+    gatehouseSprite = new THREE.Mesh(gatehouseGeometry, gatehouseMaterial);
+    gatehouseSprite.position.set(-5, 5, -300); // Left side of road at clearing
+    gatehouseSprite.rotation.y = 0; // Face forward
     
-    scene.add(gatehouse);
+    scene.add(gatehouseSprite);
     console.log('Gatehouse created at clearing');
 }
 
@@ -1180,6 +1199,7 @@ function handleInput() {
     
     // Start music crossfade early at Z=-200
     if (!crossfadeStarted && player.position.z <= -200) {
+        console.log('Player reached Z=-200, triggering music crossfade');
         startMusicCrossfade();
     }
     
@@ -1189,7 +1209,7 @@ function handleInput() {
         console.log('Auto-drive activated');
     }
     
-    if (isAutoDriving) {
+    if (isAutoDriving && !isWinning) {
         // Auto-drive to stop at Z=-270 (before the gatehouse)
         const targetZ = -270;
         if (player.position.z > targetZ) {
@@ -1235,6 +1255,18 @@ function handleInput() {
     forward.normalize();
     forward.negate(); // Keep the original direction - this was correct!
     player.position.addScaledVector(forward, speed * deltaTime * 60); // Scale by deltaTime and 60 for proper speed
+
+    // Check win state - if player has driven 10 Z increments forward, trigger win ending
+    if (isWinning && winStartZ !== null) {
+        const distanceDriven = winStartZ - player.position.z; // Negative Z is forward
+        console.log(`Win progress: ${distanceDriven.toFixed(1)}/10 Z units`);
+        
+        if (distanceDriven >= 10) {
+            console.log('Player drove through gate! Triggering win ending.');
+            isWinning = false; // Prevent multiple triggers
+            fadeToWhiteAndRestart();
+        }
+    }
 
     // Keep sky centered on player
     sky.position.copy(player.position);
@@ -1668,8 +1700,18 @@ function showDenominationList() {
         "Coptic Catholic Church",
         "Eritrean Catholic Church",
         "Ethiopian Catholic Church",
-        "Armenian Catholic Church"
+        "Armenian Catholic Church",
+        "Apostolic Catholic Church"
     ];
+    
+    // Set the correct denomination for this round
+    if (DEBUG_WIN_STATE) {
+        correctDenomination = "Apostolic Catholic Church";
+        console.log('DEBUG: Correct answer is always Apostolic Catholic Church');
+    } else {
+        correctDenomination = denominations[Math.floor(Math.random() * denominations.length)];
+        console.log('Correct denomination for this round:', correctDenomination);
+    }
     
     let selectedIndex = 0; // Start with first item selected
     
@@ -1806,8 +1848,83 @@ function selectDenomination(denomination) {
     
     showingDenominations = false;
     
-    // Start the tragic ending sequence
-    startEndingSequence();
+    // Check if this is the correct answer
+    if (denomination === correctDenomination) {
+        console.log('WINNER! Correct denomination chosen:', denomination);
+        startWinSequence();
+    } else {
+        console.log('Wrong choice. Starting tragic ending.');
+        startEndingSequence();
+    }
+}
+
+// Win sequence - gate opens, soldier smiles, auto-drive through
+function startWinSequence() {
+    console.log('Starting win sequence!');
+    
+    // Play "go ahead" audio
+    audioManager.play('goAheadAudio', { volumeCategory: 'dialogueAudio' });
+    
+    // Change gatehouse to open gate
+    if (gatehouseSprite) {
+        gatehouseSprite.material.map = gatehouseOpenTexture;
+        gatehouseSprite.material.needsUpdate = true;
+        console.log('Gate opened!');
+    }
+    
+    // Make leaning soldier smile
+    if (walkingSoldier) {
+        walkingSoldier.material.map = soldierLeaning3Texture;
+        walkingSoldier.material.needsUpdate = true;
+        console.log('Soldier is smiling!');
+    }
+    
+    // Enable win state - player must drive forward 10 Z increments
+    setTimeout(() => {
+        console.log('You can now drive forward through the gate!');
+        
+        // Give player back control of the car
+        isAutoDriving = false;
+        carStopped = false;
+        speed = 0; // Reset speed so player starts from stopped
+        
+        // Enable win state tracking
+        isWinning = true;
+        winStartZ = player.position.z;
+        console.log('Win state activated at Z position:', winStartZ);
+        console.log('Player controls restored - use W/Arrow Up to drive forward!');
+    }, 2000); // 2 seconds after audio starts
+}
+
+// Fade to white screen and restart game
+function fadeToWhiteAndRestart() {
+    console.log('Fading to white and restarting...');
+    
+    // Create white overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: white;
+        opacity: 0;
+        z-index: 1000;
+        transition: opacity 2s ease-in-out;
+    `;
+    document.body.appendChild(overlay);
+    
+    // Trigger fade in
+    setTimeout(() => {
+        overlay.style.opacity = '1';
+    }, 50);
+    
+    // Restart game after fade completes
+    setTimeout(() => {
+        overlay.remove();
+        resetGame();
+    }, 2500);
 }
 
 // The tragic ending sequence
@@ -1919,6 +2036,8 @@ function resetGame() {
     // Reset all variables
     isAutoDriving = false;
     crossfadeStarted = false;
+    isWinning = false;
+    winStartZ = null;
     soldierWalkingToWindow = false;
     soldierAtWindow = false;
     carStopped = false;
