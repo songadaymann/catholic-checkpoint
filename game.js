@@ -51,38 +51,46 @@ const audioLevels = {
 
 // Start audio on first user input
 function startAudioIfNeeded() {
-    // Enable all audio files for mobile by playing then pausing (but prevent cacophony)
+    // Check if we've already initialized audio
+    if (window.audioInitialized) return;
+    window.audioInitialized = true;
+    
+    // Enable all audio files for mobile by playing then pausing
     const audioFiles = [
-        backgroundMusic, forestMusic, carSound, religionAudio, 
-        catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, 
-        ringingAudio, footstepsAudio
+        religionAudio, catholicAudio, whatKindAudio, wrongAudio, 
+        gunshotAudio, ringingAudio, footstepsAudio
     ];
     
+    // Handle non-continuous audio files
     audioFiles.forEach(audio => {
         if (audio && audio.paused) {
-            // Store original volume and set to 0 to prevent sound during enable
             const originalVolume = audio.volume;
             audio.volume = 0;
             
             audio.play().then(() => {
-                // Only pause if it's not background music or car sound (they should keep playing)
-                if (audio !== backgroundMusic && audio !== carSound) {
-                    audio.pause();
-                    audio.currentTime = 0;
-                }
-                // Restore original volume
+                audio.pause();
+                audio.currentTime = 0;
                 audio.volume = originalVolume;
             }).catch(err => {
                 console.log('Audio enable error:', err);
-                // Restore volume even on error
                 audio.volume = originalVolume;
             });
         }
     });
     
+    // Handle continuous audio (background music and car sound) separately
+    if (backgroundMusic && backgroundMusic.paused) {
+        backgroundMusic.play().catch(err => console.log('Background music error:', err));
+    }
+    
+    if (carSound && carSound.paused) {
+        carSound.play().catch(err => console.log('Car sound error:', err));
+    }
+    
     // Enable all video elements for mobile only
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (isMobile) {
+    if (isMobile && !window.videosInitialized) {
+        window.videosInitialized = true;
         console.log('Mobile detected - attempting to enable', videos.length, 'videos...');
         videos.forEach((video, index) => {
             if (video && video.paused) {
@@ -93,18 +101,17 @@ function startAudioIfNeeded() {
                     video.currentTime = 0;
                 }).catch(err => {
                     console.error(`Video ${index + 1} enable error:`, err);
-                    // Try with muted for stricter mobile browsers
                     video.muted = true;
                     video.play().then(() => {
                         console.log(`Video ${index + 1} enabled with mute`);   
                         video.pause();
                         video.currentTime = 0;
-                        video.muted = false; // Restore audio for later
+                        video.muted = false;
                     }).catch(err2 => console.error(`Video ${index + 1} muted enable error:`, err2));
                 });
             }
         });
-    } else {
+    } else if (!isMobile) {
         console.log('Desktop detected - skipping video pre-enable');
     }
 }
@@ -765,7 +772,7 @@ function showInstructions() {
         controlsContainer.innerHTML = `
             <div style="margin-bottom: 20px;">
                 <div style="font-size: 24px; margin-bottom: 15px;">📱 Touch Controls</div>
-                <div>Tap the <strong>DRIVE</strong> button to move forward</div>
+                <div>Hold the <strong>DRIVE</strong> button to move forward</div>
                 <div>Drag left ⟵ ⟶ right to look around</div>
             </div>
         `;
@@ -790,18 +797,43 @@ function showInstructions() {
             user-select: none;
             z-index: 1500;
             display: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
         `;
         
-        // Touch events for mobile drive button
+        // Touch events for mobile drive button - prevent default and use proper key
+        let isDriving = false;
+        
         driveButton.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            keys['ArrowUp'] = true;
-            startAudioIfNeeded();
-        });
+            e.stopPropagation();
+            if (!isDriving) {
+                isDriving = true;
+                keys['KeyW'] = true; // Use KeyW which the movement code checks for
+                startAudioIfNeeded();
+                driveButton.style.backgroundColor = '#555';
+            }
+        }, { passive: false });
+        
         driveButton.addEventListener('touchend', (e) => {
             e.preventDefault();
+            e.stopPropagation();
+            isDriving = false;
+            keys['KeyW'] = false;
             keys['ArrowUp'] = false;
-        });
+            driveButton.style.backgroundColor = '#333';
+        }, { passive: false });
+        
+        driveButton.addEventListener('touchcancel', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            isDriving = false;
+            keys['KeyW'] = false;
+            keys['ArrowUp'] = false;
+            driveButton.style.backgroundColor = '#333';
+        }, { passive: false });
         
         document.body.appendChild(driveButton);
         
@@ -1700,15 +1732,14 @@ function setupControls() {
     const canvas = document.getElementById('gameCanvas');
     
     canvas.addEventListener('click', () => {
-        canvas.requestPointerLock();
+        // Only request pointer lock on desktop
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (!isMobile) {
+            canvas.requestPointerLock();
+        }
         
-        // Start background music and car sound on first click
-        if (backgroundMusic && backgroundMusic.paused) {
-            backgroundMusic.play().catch(err => console.log('Music play error:', err));
-        }
-        if (carSound && carSound.paused) {
-            carSound.play().catch(err => console.log('Car sound error:', err));
-        }
+        // Start audio on first interaction
+        startAudioIfNeeded();
     });
 
     document.addEventListener('pointerlockchange', () => {
@@ -1760,7 +1791,7 @@ function setupControls() {
             camera.rotation.y = -mouse.x;
             camera.rotation.x = 0; // Lock vertical look
         }
-    });
+    }, { passive: false });
     
     canvas.addEventListener('touchend', (event) => {
         // Keep current look position when touch ends
