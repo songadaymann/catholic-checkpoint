@@ -10,7 +10,7 @@ class AudioManager {
         
         // Audio levels that work consistently across platforms
         this.audioLevels = {
-            backgroundMusic: isMobileDevice ? 0.015 : 0.02,
+            backgroundMusic: isMobileDevice ? 0.01 : 0.07,
             forestMusic: isMobileDevice ? 0.02 : 0.025,
             carSound: isMobileDevice ? 0.05 : 0.1,
             videoAudio: isMobileDevice ? 0.9 : 0.8,
@@ -251,6 +251,15 @@ async function startAudioIfNeeded() {
         // Initialize Web Audio context
         await audioManager.init();
         
+        // CRITICAL: Ensure audio context is running before proceeding
+        if (audioManager.audioContext.state === 'suspended') {
+            console.log('Audio context still suspended, forcing resume...');
+            await audioManager.audioContext.resume();
+        }
+        
+        // Double-check context state
+        console.log('Audio context state after init:', audioManager.audioContext.state);
+        
         // Load all audio files
         await Promise.all([
             audioManager.loadAudio('backgroundMusic', 'audio/ride-of-the-nazi-soy-boy.mp3'),
@@ -267,41 +276,69 @@ async function startAudioIfNeeded() {
         
         console.log('All audio loaded successfully');
         
-        // Check if audio context is actually running before playing
-        if (audioManager.audioContext.state !== 'running') {
-            console.warn('Audio context not running when trying to play audio:', audioManager.audioContext.state);
-            // Try to resume again
-            await audioManager.audioContext.resume();
-            console.log('Audio context state after second resume attempt:', audioManager.audioContext.state);
-        }
-        
-        // Start background music
+        // Start background music with Web Audio
         audioManager.play('backgroundMusic', { 
             loop: true, 
             volumeCategory: 'backgroundMusic' 
         });
         
-        // Start car sound
+        // Start car sound with Web Audio
         audioManager.play('carSound', { 
             loop: true, 
             volumeCategory: 'carSound' 
         });
         
-        // Connect all video elements to Web Audio (desktop) or set volume directly (mobile)
-        videos.forEach((video, index) => {
-            if (video) {
-                audioManager.connectVideoElement(video, 'videoAudio');
-                if (isMobileDevice) {
-                    console.log(`Video ${index + 1} volume set directly (mobile)`);
-                } else {
-                    console.log(`Video ${index + 1} connected to Web Audio API`);
+        // For mobile: Don't connect videos to Web Audio, let them handle their own audio
+        if (!isMobileDevice) {
+            // Desktop only: Connect videos to Web Audio
+            videos.forEach((video, index) => {
+                if (video) {
+                    audioManager.connectVideoElement(video, 'videoAudio');
+                    console.log(`Desktop: Video ${index + 1} connected to Web Audio API`);
                 }
-            }
-        });
+            });
+        } else {
+            console.log('Mobile: Videos will handle their own audio playback');
+        }
+        
+        // Mobile-specific: Ensure videos are properly configured
+        if (isMobileDevice) {
+            videos.forEach((video, index) => {
+                // Critical iOS attributes
+                video.playsInline = true;
+                video.setAttribute('playsinline', 'true');
+                video.setAttribute('webkit-playsinline', 'true');
+                
+                // Ensure muted initially for autoplay
+                video.muted = true;
+                
+                console.log(`Mobile: Video ${index + 1} configured for iOS playback`);
+            });
+        }
         
     } catch (error) {
         console.error('Failed to initialize audio:', error);
+        // Don't throw - allow game to continue even if audio fails
     }
+}
+
+// iOS audio unlock helper function
+function unlockiOSAudio() {
+    if (!isMobileDevice) return;
+    
+    // Create a silent buffer to unlock audio context
+    const buffer = audioManager.audioContext.createBuffer(1, 1, 22050);
+    const source = audioManager.audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioManager.audioContext.destination);
+    source.start(0);
+    
+    // Resume context if needed
+    if (audioManager.audioContext.state === 'suspended') {
+        audioManager.audioContext.resume();
+    }
+    
+    console.log('iOS audio unlock attempted');
 }
 
 // Crossfade from background music to forest music over longer period
@@ -691,8 +728,19 @@ function createVideoSystem() {
         const video = document.createElement('video');
         video.src = `videos/${filename}`;
         video.preload = 'metadata';
-        video.muted = false; // Enable audio playback
-        video.volume = isMobileDevice ? 0.9 : 0.8; // Set initial volume
+        
+        // Mobile-specific video configuration
+        if (isMobileDevice) {
+            video.muted = true; // Start muted for iOS autoplay compatibility
+            video.volume = 0.9;
+            video.playsInline = true;
+            video.setAttribute('playsinline', 'true');
+            video.setAttribute('webkit-playsinline', 'true');
+        } else {
+            video.muted = false; // Desktop can start unmuted
+            video.volume = 0.8;
+        }
+        
         video.crossOrigin = 'anonymous';
         video.autoplay = false; // Explicitly prevent autoplay
         video.loop = false;
@@ -1025,7 +1073,12 @@ function showInstructions() {
         }
         
         // Start audio if needed
-        startAudioIfNeeded();
+        startAudioIfNeeded().then(() => {
+            // Unlock iOS audio after initialization
+            if (window.audioManager && isMobileDevice) {
+                unlockiOSAudio();
+            }
+        });
     });
     
     instructionsContainer.appendChild(startButton);
@@ -1280,6 +1333,15 @@ function checkVideoProximity() {
                 console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
                 video.play().then(() => {
                     console.log(`Video ${index + 1} started playing successfully`);
+                    
+                    // For mobile: unmute after playback starts (100ms delay)
+                    if (isMobile && video.muted) {
+                        setTimeout(() => {
+                            video.muted = false;
+                            console.log(`Video ${index + 1} unmuted after playback start`);
+                        }, 100);
+                    }
+                    
                     // Background music should already be playing continuously - don't restart it
                 }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
