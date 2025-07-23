@@ -56,10 +56,10 @@ const audioLevels = isMobileDevice ? {
     videoAudio: 0.8         // Louder video dialogue on mobile
 } : {
     // Desktop audio levels
-    backgroundMusic: 0.015,  // Background music volume (0.0 to 1.0)
+    backgroundMusic: 0.01,  // Background music volume (0.0 to 1.0)
     forestMusic: .025,     // Forest music volume for gatehouse scene
     carSound: 0.1,         // Car engine sound volume
-    videoAudio: 0.8        // Video dialogue volume
+    videoAudio: 0.9        // Video dialogue volume
 };
 
 // Start audio on first user input
@@ -74,23 +74,39 @@ function startAudioIfNeeded() {
         gunshotAudio, ringingAudio, footstepsAudio
     ];
     
-    // Handle non-continuous audio files - make sure they're muted during initialization
+    // Handle non-continuous audio files - use a safer approach
     audioFiles.forEach(audio => {
         if (audio && audio.paused) {
             const originalVolume = audio.volume;
-            audio.volume = 0;
-            audio.muted = true; // Ensure muted during initialization
             
-            audio.play().then(() => {
-                audio.pause();
-                audio.currentTime = 0;
-                audio.muted = false; // Unmute after pausing
-                audio.volume = originalVolume;
-            }).catch(err => {
-                console.log('Audio enable error:', err);
+            // Set volume to 0 AND mute before any play attempt
+            audio.volume = 0;
+            audio.muted = true;
+            
+            // Create a promise chain to ensure proper initialization
+            const initPromise = audio.play();
+            
+            // Immediately pause - don't wait for promise
+            audio.pause();
+            audio.currentTime = 0;
+            
+            // Handle the promise to restore settings
+            if (initPromise && initPromise.then) {
+                initPromise.then(() => {
+                    // Audio was successfully initialized
+                    audio.muted = false;
+                    audio.volume = originalVolume;
+                }).catch(err => {
+                    // Even on error, restore settings
+                    console.log('Audio enable error:', err);
+                    audio.muted = false;
+                    audio.volume = originalVolume;
+                });
+            } else {
+                // No promise returned, restore settings immediately
                 audio.muted = false;
                 audio.volume = originalVolume;
-            });
+            }
         }
     });
     
@@ -99,23 +115,30 @@ function startAudioIfNeeded() {
         backgroundMusic.play().catch(err => console.log('Background music error:', err));
     }
     
-    // Initialize car sound but don't play it yet - it should only play when moving
+    // Initialize car sound but don't play it yet - use same safe approach
     if (carSound && carSound.paused) {
         const originalVolume = carSound.volume;
         carSound.volume = 0;
         carSound.muted = true;
         
-        carSound.play().then(() => {
-            carSound.pause();
-            carSound.currentTime = 0;
+        const initPromise = carSound.play();
+        carSound.pause();
+        carSound.currentTime = 0;
+        
+        if (initPromise && initPromise.then) {
+            initPromise.then(() => {
+                carSound.muted = false;
+                carSound.volume = originalVolume;
+                console.log('Car sound initialized but not playing');
+            }).catch(err => {
+                console.log('Car sound initialization error:', err);
+                carSound.muted = false;
+                carSound.volume = originalVolume;
+            });
+        } else {
             carSound.muted = false;
             carSound.volume = originalVolume;
-            console.log('Car sound initialized but not playing');
-        }).catch(err => {
-            console.log('Car sound initialization error:', err);
-            carSound.muted = false;
-            carSound.volume = originalVolume;
-        });
+        }
     }
     
     // Enable all video elements for mobile only
@@ -135,31 +158,41 @@ function startAudioIfNeeded() {
                 video.muted = true;
                 video.volume = 0;
                 
-                video.play().then(() => {
-                    console.log(`Video ${index + 1} enabled successfully`);
-                    video.pause();
-                    video.currentTime = 0;
-                    // Restore original settings
+                // Use immediate pause approach
+                const initPromise = video.play();
+                
+                // Immediately pause - don't wait for promise
+                video.pause();
+                video.currentTime = 0;
+                
+                // Handle the promise
+                if (initPromise && initPromise.then) {
+                    initPromise.then(() => {
+                        console.log(`Video ${index + 1} enabled successfully`);
+                        // Restore original settings
+                        video.muted = false;
+                        video.volume = originalVolume;
+                        
+                        // Restart background music if it was interrupted
+                        if (musicWasPlaying && backgroundMusic.paused) {
+                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                        }
+                    }).catch(err => {
+                        console.error(`Video ${index + 1} enable error:`, err);
+                        // Restore settings even on error
+                        video.muted = false;
+                        video.volume = originalVolume;
+                        
+                        // Restart background music if it was interrupted
+                        if (musicWasPlaying && backgroundMusic.paused) {
+                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                        }
+                    });
+                } else {
+                    // No promise returned
                     video.muted = false;
                     video.volume = originalVolume;
-                    
-                    // Restart background music if it was interrupted
-                    if (musicWasPlaying && backgroundMusic.paused) {
-                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                    }
-                }).catch(err => {
-                    console.error(`Video ${index + 1} enable error:`, err);
-                    // Keep muted if error
-                    video.pause();
-                    video.currentTime = 0;
-                    video.muted = false;
-                    video.volume = originalVolume;
-                    
-                    // Restart background music if it was interrupted
-                    if (musicWasPlaying && backgroundMusic.paused) {
-                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                    }
-                });
+                }
             }
         });
     } else if (!isMobile) {
@@ -613,40 +646,59 @@ function createAudioSystem() {
     backgroundMusic = new Audio('audio/ride-of-the-nazi-soy-boy.mp3');
     backgroundMusic.loop = true;
     backgroundMusic.volume = audioLevels.backgroundMusic;
+    backgroundMusic.autoplay = false;
     
     // Load forest music
     forestMusic = new Audio('audio/forest.mp3');
     forestMusic.loop = true;
     forestMusic.volume = audioLevels.forestMusic;
+    forestMusic.autoplay = false;
     
     // Load car sound
     carSound = new Audio('audio/car.mp3');
     carSound.loop = true;
     carSound.volume = audioLevels.carSound;
+    carSound.autoplay = false;
     
     // Load dialogue audio
     religionAudio = new Audio('audio/religion.mp3');
     religionAudio.volume = audioLevels.videoAudio;
+    religionAudio.autoplay = false;
     
     catholicAudio = new Audio("audio/i'm-a-catholic.mp3");
     catholicAudio.volume = audioLevels.videoAudio;
+    catholicAudio.autoplay = false;
     
     whatKindAudio = new Audio('audio/what-kind.mp3');
     whatKindAudio.volume = audioLevels.videoAudio;
+    whatKindAudio.autoplay = false;
     
     // Load ending sequence audio
     wrongAudio = new Audio('audio/wrong.mp3');
     wrongAudio.volume = audioLevels.videoAudio;
+    wrongAudio.autoplay = false;
     
     gunshotAudio = new Audio('audio/gunshot.mp3');
     gunshotAudio.volume = audioLevels.videoAudio;
+    gunshotAudio.autoplay = false;
     
     ringingAudio = new Audio('audio/ringing.mp3');
     ringingAudio.volume = audioLevels.videoAudio;
+    ringingAudio.autoplay = false;
     
     footstepsAudio = new Audio('audio/footsteps.mp3');
     footstepsAudio.volume = audioLevels.videoAudio;
     footstepsAudio.loop = true; // Loop while walking
+    footstepsAudio.autoplay = false;
+    
+    // Explicitly pause all one-shot audio files as a safeguard
+    const oneShotAudios = [religionAudio, catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, ringingAudio, footstepsAudio];
+    oneShotAudios.forEach(audio => {
+        if (audio) {
+            audio.pause();
+            audio.currentTime = 0;
+        }
+    });
     
     // Background music will start after user interaction (browser requirement)
     console.log('Background music loaded - will start after user clicks');
