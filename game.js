@@ -11,7 +11,7 @@ let treesData, grassSpritesData;
 let sprites = [];
 let carInterior;
 let speed = 0;
-let maxSpeed = .105; // Much slower for better timing
+let maxSpeed = .2; // Much slower for better timing
 let gameStartTime = 0;
 let isAutoDriving = false; // Track if we're in auto-drive mode
 let crossfadeStarted = false; // Track if music crossfade has started
@@ -34,6 +34,10 @@ let videoPositions = []; // Will store Z positions for each video
 let videosPlayed = []; // Track which videos have already been played
 let videoProximities = []; // Trigger distances for each video
 let playthroughCount = 0; // Track which playthrough we're on for video patterns
+
+// Add frame-rate independent movement variables
+let lastFrameTime = 0;
+let deltaTime = 0;
 
 // Audio system
 let backgroundMusic;
@@ -92,6 +96,10 @@ function startAudioIfNeeded() {
     if (isMobile && !window.videosInitialized) {
         window.videosInitialized = true;
         console.log('Mobile detected - attempting to enable', videos.length, 'videos...');
+        
+        // Ensure background music stays playing during video initialization
+        const musicWasPlaying = backgroundMusic && !backgroundMusic.paused;
+        
         videos.forEach((video, index) => {
             if (video && video.paused) {
                 console.log(`Enabling video ${index + 1}:`, video.src);
@@ -99,6 +107,11 @@ function startAudioIfNeeded() {
                     console.log(`Video ${index + 1} enabled successfully`);
                     video.pause();
                     video.currentTime = 0;
+                    
+                    // Restart background music if it was interrupted
+                    if (musicWasPlaying && backgroundMusic.paused) {
+                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                    }
                 }).catch(err => {
                     console.error(`Video ${index + 1} enable error:`, err);
                     video.muted = true;
@@ -107,6 +120,11 @@ function startAudioIfNeeded() {
                         video.pause();
                         video.currentTime = 0;
                         video.muted = false;
+                        
+                        // Restart background music if it was interrupted
+                        if (musicWasPlaying && backgroundMusic.paused) {
+                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                        }
                     }).catch(err2 => console.error(`Video ${index + 1} muted enable error:`, err2));
                 });
             }
@@ -959,9 +977,11 @@ function handleInput() {
         // Auto-drive to stop at Z=-270 (before the gatehouse)
         const targetZ = -270;
         if (player.position.z > targetZ) {
-            speed = Math.max(speed + 0.002, 0.008); // Very very slow approach (40% of original speed)
+            // Frame-rate independent acceleration
+            speed = Math.max(speed + 0.12 * deltaTime, 0.008); // Adjusted for deltaTime (0.002 * 60fps = 0.12)
         } else {
-            speed *= 0.9; // Slow down as we approach
+            // Frame-rate independent deceleration
+            speed *= Math.pow(0.9, deltaTime * 60); // Exponential decay adjusted for deltaTime
             if (speed < 0.01) {
                 speed = 0; // Stop when close enough
                 if (!carStopped) {
@@ -980,12 +1000,15 @@ function handleInput() {
         // Manual controls when not in auto mode
         if (keys['ArrowUp'] || keys['KeyW']) {
             startAudioIfNeeded(); // Start audio on movement input
-            speed = Math.min(speed + 1, maxSpeed);
+            // Frame-rate independent acceleration (1 * 60fps = 60)
+            speed = Math.min(speed + 60 * deltaTime, maxSpeed);
         } else if (keys['ArrowDown'] || keys['KeyS']) {
             startAudioIfNeeded(); // Start audio on movement input
-            speed = Math.max(speed - 0.04, -maxSpeed * 1);
+            // Frame-rate independent deceleration (0.04 * 60fps = 2.4)
+            speed = Math.max(speed - 2.4 * deltaTime, -maxSpeed * 1);
         } else {
-            speed *= .5;
+            // Frame-rate independent friction
+            speed *= Math.pow(0.5, deltaTime * 60);
         }
     }
 
@@ -995,7 +1018,7 @@ function handleInput() {
     forward.y = 0; // Stay on ground level
     forward.normalize();
     forward.negate(); // Keep the original direction - this was correct!
-    player.position.addScaledVector(forward, speed);
+    player.position.addScaledVector(forward, speed * deltaTime * 60); // Scale by deltaTime and 60 for proper speed
 
     // Keep sky centered on player
     sky.position.copy(player.position);
@@ -1060,11 +1083,24 @@ function checkVideoProximity() {
                 const texture = new THREE.VideoTexture(video);
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
-                texture.format = THREE.RGBAFormat;
                 
-                // Update material with video texture
+                // Mobile-specific handling for transparency
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                if (isMobile) {
+                    // Use RGB format on mobile as alpha channel may not work properly
+                    texture.format = THREE.RGBFormat;
+                    // Ensure video element preserves alpha if supported
+                    video.setAttribute('playsinline', '');
+                    video.setAttribute('webkit-playsinline', '');
+                } else {
+                    texture.format = THREE.RGBAFormat;
+                }
+                
+                // Update material with video texture - ensure transparency is properly set
                 videoSprites[index].material.map = texture;
+                videoSprites[index].material.transparent = true;
                 videoSprites[index].material.opacity = 1; // Make visible
+                videoSprites[index].material.alphaTest = 0.1; // Add alpha test for better transparency handling
                 videoSprites[index].material.needsUpdate = true;
                 
                 // Add event listener to mark as played when finished
@@ -1077,6 +1113,13 @@ function checkVideoProximity() {
                 console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
                 video.play().then(() => {
                     console.log(`Video ${index + 1} started playing successfully`);
+                    
+                    // Ensure background music continues on mobile
+                    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                    if (isMobile && backgroundMusic && backgroundMusic.paused && !crossfadeStarted) {
+                        console.log('Restarting background music after video start');
+                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                    }
                 }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
                     console.log(`Video ${index + 1} readyState:`, video.readyState, 'networkState:', video.networkState);
@@ -1089,8 +1132,17 @@ function checkVideoProximity() {
 }
 
 // Animation loop
-function animate() {
+function animate(currentTime) {
     requestAnimationFrame(animate);
+    
+    // Calculate deltaTime for frame-rate independent movement
+    if (!lastFrameTime) {
+        lastFrameTime = currentTime;
+        deltaTime = 1/60; // Default to 60fps for first frame
+    } else {
+        deltaTime = Math.min((currentTime - lastFrameTime) / 1000, 0.1); // Cap at 0.1 to prevent huge jumps
+        lastFrameTime = currentTime;
+    }
 
     handleInput();
     checkVideoProximity();
@@ -1110,8 +1162,8 @@ function updateSoldierWaddle() {
     
     // Move soldier toward car window (forward along road)
     if (currentZ < targetZ - 1) {
-        // Waddle forward with side-to-side sway and bobbing
-        walkingSoldier.position.z += 0.05; // Move forward toward car
+        // Waddle forward with side-to-side sway and bobbing - frame-rate independent
+        walkingSoldier.position.z += 3 * deltaTime; // 0.05 * 60fps = 3
         walkingSoldier.position.x = -2 + Math.sin(time * 3) * 0.2; // Slight sway left/right
         walkingSoldier.position.y = 3 + Math.sin(time * 4) * 0.15; // Bob up and down
     } else {
