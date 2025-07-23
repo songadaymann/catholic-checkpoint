@@ -727,7 +727,9 @@ function createVideoSystem() {
     videoFiles.forEach((filename, index) => {
         const video = document.createElement('video');
         video.src = `videos/${filename}`;
-        video.preload = 'metadata';
+        
+        // CRITICAL: Set preload BEFORE other attributes on iOS
+        video.preload = 'auto'; // Changed from 'metadata' to 'auto' for mobile
         
         // Mobile-specific video configuration
         if (isMobileDevice) {
@@ -736,6 +738,9 @@ function createVideoSystem() {
             video.playsInline = true;
             video.setAttribute('playsinline', 'true');
             video.setAttribute('webkit-playsinline', 'true');
+            // Add this for better iOS compatibility
+            video.setAttribute('muted', 'true');
+            video.defaultMuted = true;
         } else {
             video.muted = false; // Desktop can start unmuted
             video.volume = 0.8;
@@ -1224,7 +1229,7 @@ function handleInput() {
 function checkVideoProximity() {
     const playerZ = player.position.z;
     
-    // Debug log occasionally (every ~60 frames at 60fps = ~1 second)
+    // Debug log occasionally
     if (Math.floor(Date.now() / 1000) % 5 === 0 && Date.now() % 1000 < 16) {
         console.log(`Player Z: ${playerZ.toFixed(1)}, checking ${videos.length} videos`);
     }
@@ -1233,14 +1238,13 @@ function checkVideoProximity() {
         const videoZ = videoPositions[index];
         const distance = Math.abs(playerZ - videoZ);
         
-        // Only trigger if approaching the video (playerZ > videoZ) and within proximity
+        // Only trigger if approaching the video and within proximity
         const isApproaching = playerZ > videoZ;
         if (isApproaching && distance <= videoProximities[index]) {
             // Find if this is the closest video
             let isClosest = true;
             let closestDistance = distance;
             
-            // Check all other videos to see if any are closer
             for (let i = 0; i < videoPositions.length; i++) {
                 if (i !== index) {
                     const otherDistance = Math.abs(playerZ - videoPositions[i]);
@@ -1252,28 +1256,25 @@ function checkVideoProximity() {
                 }
             }
             
-            // If this is the closest video, it's not already playing, and hasn't been played before
+            // If this is the closest video, not already playing, and hasn't been played
             if (isClosest && video.paused && !videosPlayed[index]) {
-                // Create texture and start playing
+                // Create texture
                 const texture = new THREE.VideoTexture(video);
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
                 texture.format = THREE.RGBAFormat;
                 
-                // Mobile-specific handling for transparency
-                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-                
-                // Create material with chroma key shader for mobile
+                // Create material
                 let material;
-                if (isMobile) {
-                    // Use an improved shader for mobile that handles transparency better
+                if (isMobileDevice) {
+                    // Mobile shader for transparency
                     material = new THREE.ShaderMaterial({
                         uniforms: {
                             map: { value: texture },
-                            alphaThreshold: { value: 0.5 }, // Alpha cutoff
-                            chromaKey: { value: new THREE.Color(0x000000) }, // Black background
-                            chromaThreshold: { value: 0.4 }, // How close to black
-                            chromaSmooth: { value: 0.2 } // Smoothing for edges
+                            alphaThreshold: { value: 0.5 },
+                            chromaKey: { value: new THREE.Color(0x000000) },
+                            chromaThreshold: { value: 0.4 },
+                            chromaSmooth: { value: 0.2 }
                         },
                         vertexShader: `
                             varying vec2 vUv;
@@ -1292,17 +1293,10 @@ function checkVideoProximity() {
                             
                             void main() {
                                 vec4 color = texture2D(map, vUv);
-                                
-                                // Check if pixel is close to black
                                 float chromaDiff = length(color.rgb - chromaKey);
                                 float chromaAlpha = smoothstep(chromaThreshold - chromaSmooth, chromaThreshold + chromaSmooth, chromaDiff);
-                                
-                                // Also respect the actual alpha channel if present
                                 float finalAlpha = min(chromaAlpha, color.a);
-                                
-                                // Apply alpha threshold to clean up edges
                                 finalAlpha = finalAlpha < alphaThreshold ? 0.0 : finalAlpha;
-                                
                                 gl_FragColor = vec4(color.rgb, finalAlpha);
                             }
                         `,
@@ -1310,7 +1304,7 @@ function checkVideoProximity() {
                         side: THREE.DoubleSide
                     });
                 } else {
-                    // Desktop uses standard material with alpha
+                    // Desktop material
                     material = new THREE.MeshBasicMaterial({
                         map: texture,
                         transparent: true,
@@ -1323,33 +1317,60 @@ function checkVideoProximity() {
                 videoSprites[index].material.dispose();
                 videoSprites[index].material = material;
                 
-                // Add event listener to mark as played when finished
+                // Add ended listener
                 video.addEventListener('ended', () => {
                     videosPlayed[index] = true;
                     console.log(`Video ${index + 1} finished - marked as played`);
-                });
+                }, { once: true });
                 
-                // Start playing
+                // CRITICAL MOBILE FIX: Ensure video is muted before playing on mobile
+                if (isMobileDevice) {
+                    video.muted = true; // Ensure it's muted
+                    video.setAttribute('playsinline', 'true'); // Ensure inline playback
+                }
+                
+                // Try to play video
                 console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
                 video.play().then(() => {
                     console.log(`Video ${index + 1} started playing successfully`);
                     
-                    // For mobile: unmute after playback starts (100ms delay)
-                    if (isMobile && video.muted) {
+                    // MOBILE ONLY: Unmute after playback starts
+                    if (isMobileDevice && video.muted) {
                         setTimeout(() => {
                             video.muted = false;
-                            console.log(`Video ${index + 1} unmuted after playback start`);
-                        }, 100);
+                            // Set volume directly since we're not using Web Audio for mobile videos
+                            video.volume = 0.9; // Use the mobile video volume
+                            console.log(`Mobile: Video ${index + 1} unmuted, volume set to ${video.volume}`);
+                        }, 150); // Slightly longer delay for iOS
                     }
-                    
-                    // Background music should already be playing continuously - don't restart it
                 }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
-                    console.log(`Video ${index + 1} readyState:`, video.readyState, 'networkState:', video.networkState);
+                    console.log(`Video ${index + 1} state - muted: ${video.muted}, readyState: ${video.readyState}`);
+                    
+                    // MOBILE FALLBACK: If autoplay fails, try on next interaction
+                    if (isMobileDevice) {
+                        const playOnInteraction = () => {
+                            if (!videosPlayed[index] && video.paused) {
+                                video.muted = true; // Ensure muted for retry
+                                video.play().then(() => {
+                                    console.log(`Mobile: Video ${index + 1} started after user interaction`);
+                                    setTimeout(() => {
+                                        video.muted = false;
+                                        video.volume = 0.9;
+                                    }, 150);
+                                }).catch(e => console.error('Video still failed:', e));
+                            }
+                            // Remove listeners after attempt
+                            document.removeEventListener('touchstart', playOnInteraction);
+                            document.removeEventListener('click', playOnInteraction);
+                        };
+                        
+                        // Add interaction listeners for retry
+                        document.addEventListener('touchstart', playOnInteraction, { once: true });
+                        document.addEventListener('click', playOnInteraction, { once: true });
+                    }
                 });
             }
-        } else {
-            // Don't pause videos when driving away - let them play to completion once started
         }
     });
 }
