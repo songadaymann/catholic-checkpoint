@@ -1,3 +1,180 @@
+// AudioManager class using Web Audio API for consistent cross-platform audio
+class AudioManager {
+    constructor() {
+        this.audioContext = null;
+        this.masterGain = null;
+        this.audioBuffers = new Map();
+        this.activeSources = new Map();
+        this.gainNodes = new Map();
+        this.isInitialized = false;
+        
+        // Audio levels that work consistently across platforms
+        this.audioLevels = {
+            backgroundMusic: isMobileDevice ? 0.015 : 0.02,
+            forestMusic: isMobileDevice ? 0.02 : 0.025,
+            carSound: isMobileDevice ? 0.05 : 0.1,
+            videoAudio: isMobileDevice ? 0.9 : 0.8,
+            dialogueAudio: isMobileDevice ? 0.9 : 0.8
+        };
+    }
+    
+    async init() {
+        if (this.isInitialized) return;
+        
+        try {
+            // Create audio context
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Resume context if suspended (required by some browsers)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+            
+            // Create master gain node
+            this.masterGain = this.audioContext.createGain();
+            this.masterGain.connect(this.audioContext.destination);
+            
+            this.isInitialized = true;
+            console.log('Web Audio API initialized successfully');
+            console.log('Audio levels:', this.audioLevels);
+            
+        } catch (error) {
+            console.error('Failed to initialize Web Audio API:', error);
+            throw error;
+        }
+    }
+    
+    async loadAudio(name, url) {
+        if (!this.isInitialized) {
+            throw new Error('AudioManager not initialized');
+        }
+        
+        try {
+            const response = await fetch(url);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+            
+            this.audioBuffers.set(name, audioBuffer);
+            console.log(`Audio loaded: ${name}`);
+            
+        } catch (error) {
+            console.error(`Failed to load audio ${name}:`, error);
+            throw error;
+        }
+    }
+    
+    play(name, options = {}) {
+        if (!this.isInitialized || !this.audioBuffers.has(name)) {
+            console.warn(`Cannot play audio: ${name} (initialized: ${this.isInitialized}, loaded: ${this.audioBuffers.has(name)})`);
+            return null;
+        }
+        
+        const buffer = this.audioBuffers.get(name);
+        const source = this.audioContext.createBufferSource();
+        const gainNode = this.audioContext.createGain();
+        
+        source.buffer = buffer;
+        source.loop = options.loop || false;
+        
+        // Set volume based on category or direct value
+        const volumeCategory = options.volumeCategory || name;
+        const volume = options.volume !== undefined ? options.volume : this.audioLevels[volumeCategory] || 1.0;
+        gainNode.gain.value = volume;
+        
+        // Connect: source -> gain -> master -> destination
+        source.connect(gainNode);
+        gainNode.connect(this.masterGain);
+        
+        // Store references for control
+        this.activeSources.set(name, source);
+        this.gainNodes.set(name, gainNode);
+        
+        // Handle ended event
+        source.addEventListener('ended', () => {
+            this.activeSources.delete(name);
+            this.gainNodes.delete(name);
+            if (options.onEnded) {
+                options.onEnded();
+            }
+        });
+        
+        source.start();
+        console.log(`Playing: ${name} at volume ${volume}`);
+        return source;
+    }
+    
+    stop(name) {
+        const source = this.activeSources.get(name);
+        if (source) {
+            source.stop();
+            this.activeSources.delete(name);
+            this.gainNodes.delete(name);
+            console.log(`Stopped: ${name}`);
+        }
+    }
+    
+    fadeOut(name, duration, stopAfter = false) {
+        const gainNode = this.gainNodes.get(name);
+        if (!gainNode) return;
+        
+        const currentTime = this.audioContext.currentTime;
+        gainNode.gain.linearRampToValueAtTime(0, currentTime + duration);
+        
+        if (stopAfter) {
+            setTimeout(() => this.stop(name), duration * 1000);
+        }
+        
+        console.log(`Fading out: ${name} over ${duration}s`);
+    }
+    
+    fadeIn(name, targetVolume, duration) {
+        const gainNode = this.gainNodes.get(name);
+        if (!gainNode) return;
+        
+        const currentTime = this.audioContext.currentTime;
+        gainNode.gain.setValueAtTime(0, currentTime);
+        gainNode.gain.linearRampToValueAtTime(targetVolume, currentTime + duration);
+        
+        console.log(`Fading in: ${name} to ${targetVolume} over ${duration}s`);
+    }
+    
+    setVolume(name, volume) {
+        const gainNode = this.gainNodes.get(name);
+        if (gainNode) {
+            gainNode.gain.value = volume;
+            console.log(`Set volume: ${name} = ${volume}`);
+        }
+    }
+    
+    connectVideoElement(videoElement, volumeCategory = 'videoAudio') {
+        if (!this.isInitialized) return null;
+        
+        try {
+            // Create media element source
+            const source = this.audioContext.createMediaElementSource(videoElement);
+            const gainNode = this.audioContext.createGain();
+            
+            // Set volume based on category
+            const volume = this.audioLevels[volumeCategory] || 1.0;
+            gainNode.gain.value = volume;
+            
+            // Connect: video -> gain -> master -> destination
+            source.connect(gainNode);
+            gainNode.connect(this.masterGain);
+            
+            // Store gain node for volume control
+            this.gainNodes.set(`video_${videoElement.src}`, gainNode);
+            
+            console.log(`Video connected to Web Audio API with volume: ${volume}`);
+            return { source, gainNode };
+            
+        } catch (error) {
+            console.error('Failed to connect video element:', error);
+            return null;
+        }
+    }
+}
+
 // Game variables
 let scene, camera, renderer;
 let player; // Container for camera that moves through world
@@ -40,151 +217,81 @@ let lastFrameTime = 0;
 let deltaTime = 0;
 
 // Audio system
-let backgroundMusic;
-let forestMusic;
-let carSound;
-let religionAudio, catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, ringingAudio, footstepsAudio;
+let audioManager = null;
 
-// Audio volume controls - adjust these to balance all sounds
+// Mobile device detection for AudioManager
 const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
 console.log('Mobile device detected:', isMobileDevice);
 console.log('User Agent:', navigator.userAgent);
 
-const audioLevels = isMobileDevice ? {
-    // Mobile audio levels - adjusted for better balance on mobile devices
-    backgroundMusic: 0.015,  // Slightly quieter background music on mobile
-    forestMusic: 0.02,      // Slightly quieter forest music on mobile
-    carSound: 0.05,         // Much quieter car sound on mobile
-    videoAudio: 0.9         // Slightly louder video dialogue on mobile
-} : {
-    // Desktop audio levels
-    backgroundMusic: 0.02,  // Background music volume (0.0 to 1.0)
-    forestMusic: .025,     // Forest music volume for gatehouse scene
-    carSound: 0.1,         // Car engine sound volume
-    videoAudio: 0.8        // Video dialogue volume
-};
-
-console.log('Audio levels being used:', JSON.stringify(audioLevels, null, 2));
-
 // Start audio on first user input
-function startAudioIfNeeded() {
-    // Check if we've already initialized audio
+async function startAudioIfNeeded() {
     if (window.audioInitialized) return;
     window.audioInitialized = true;
     
-    // Enable all audio files for mobile by playing then pausing
-    const audioFiles = [
-        religionAudio, catholicAudio, whatKindAudio, wrongAudio, 
-        gunshotAudio, ringingAudio, footstepsAudio
-    ];
-    
-    // Handle non-continuous audio files - use a safer approach
-    audioFiles.forEach(audio => {
-        if (audio && audio.paused) {
-            const originalVolume = audio.volume;
-            
-            // Set volume to 0 AND mute before any play attempt
-            audio.volume = 0;
-            audio.muted = true;
-            
-            // Create a promise chain to ensure proper initialization
-            const initPromise = audio.play();
-            
-            // Immediately pause - don't wait for promise
-            audio.pause();
-            audio.currentTime = 0;
-            
-            // Handle the promise to restore settings
-            if (initPromise && initPromise.then) {
-                initPromise.then(() => {
-                    // Audio was successfully initialized
-                    audio.muted = false;
-                    audio.volume = originalVolume;
-                }).catch(err => {
-                    // Even on error, restore settings
-                    console.log('Audio enable error:', err);
-                    audio.muted = false;
-                    audio.volume = originalVolume;
-                });
-            } else {
-                // No promise returned, restore settings immediately
-                audio.muted = false;
-                audio.volume = originalVolume;
-            }
-        }
-    });
-    
-    // Handle background music (should play) but NOT car sound yet
-    if (backgroundMusic && backgroundMusic.paused) {
-        backgroundMusic.play().catch(err => console.log('Background music error:', err));
-    }
-    
-    // Initialize and start car sound continuously
-    if (carSound && carSound.paused) {
-        carSound.play().catch(err => console.log('Car sound error:', err));
-        console.log('Car sound started playing continuously');
-    }
-    
-    // Enable all video elements for mobile only
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (isMobile && !window.videosInitialized) {
-        window.videosInitialized = true;
-        console.log('Mobile detected - setting video preload attributes for', videos.length, 'videos...');
+    try {
+        // Initialize Web Audio context
+        await audioManager.init();
         
+        // Load all audio files
+        await Promise.all([
+            audioManager.loadAudio('backgroundMusic', 'audio/ride-of-the-nazi-soy-boy.mp3'),
+            audioManager.loadAudio('forestMusic', 'audio/forest.mp3'),
+            audioManager.loadAudio('carSound', 'audio/car.mp3'),
+            audioManager.loadAudio('religionAudio', 'audio/religion.mp3'),
+            audioManager.loadAudio('catholicAudio', "audio/i'm-a-catholic.mp3"),
+            audioManager.loadAudio('whatKindAudio', 'audio/what-kind.mp3'),
+            audioManager.loadAudio('wrongAudio', 'audio/wrong.mp3'),
+            audioManager.loadAudio('gunshotAudio', 'audio/gunshot.mp3'),
+            audioManager.loadAudio('ringingAudio', 'audio/ringing.mp3'),
+            audioManager.loadAudio('footstepsAudio', 'audio/footsteps.mp3')
+        ]);
+        
+        console.log('All audio loaded successfully');
+        
+        // Start background music
+        audioManager.play('backgroundMusic', { 
+            loop: true, 
+            volumeCategory: 'backgroundMusic' 
+        });
+        
+        // Start car sound
+        audioManager.play('carSound', { 
+            loop: true, 
+            volumeCategory: 'carSound' 
+        });
+        
+        // Connect all video elements to Web Audio
         videos.forEach((video, index) => {
             if (video) {
-                // On mobile, just ensure videos are ready to play
-                video.preload = 'auto'; // Preload video data
-                video.muted = false; // Allow audio
-                video.volume = audioLevels.videoAudio; // Set proper volume
-                console.log(`Video ${index + 1} preload set to auto`);
+                audioManager.connectVideoElement(video, 'videoAudio');
+                console.log(`Video ${index + 1} connected to Web Audio API`);
             }
         });
-    } else if (!isMobile) {
-        console.log('Desktop detected - skipping video pre-enable');
+        
+    } catch (error) {
+        console.error('Failed to initialize audio:', error);
     }
 }
 
 // Crossfade from background music to forest music over longer period
 function startMusicCrossfade() {
-    if (!forestMusic || !backgroundMusic || crossfadeStarted) return;
+    if (!audioManager || crossfadeStarted) return;
     
     crossfadeStarted = true;
     
-    // Start forest music at very low volume
-    forestMusic.volume = 0;
-    forestMusic.play().catch(err => console.log('Forest music error:', err));
+    // Start forest music at 0 volume
+    audioManager.play('forestMusic', { 
+        loop: true, 
+        volume: 0 
+    });
     
-    const startTime = Date.now();
-    const fadeDuration = 20000; // 20 seconds fade
-    const startBgVolume = backgroundMusic.volume;
-    const targetForestVolume = audioLevels.forestMusic;
+    // Crossfade over 20 seconds
+    audioManager.fadeOut('backgroundMusic', 20, true); // true = stop after fade
+    audioManager.fadeIn('forestMusic', audioManager.audioLevels.forestMusic, 20);
     
-    function doFade() {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(elapsed / fadeDuration, 1);
-        
-        // Fade out background music
-        backgroundMusic.volume = Math.max(0, startBgVolume * (1 - progress));
-        
-        // Fade in forest music
-        forestMusic.volume = Math.min(targetForestVolume, targetForestVolume * progress);
-        
-        if (progress < 1) {
-            requestAnimationFrame(doFade);
-        } else {
-            // Crossfade complete
-            backgroundMusic.volume = 0;
-            backgroundMusic.pause();
-            forestMusic.volume = targetForestVolume;
-            console.log('Music crossfade completed');
-        }
-    }
-    
-    requestAnimationFrame(doFade);
-    
-    console.log('Music crossfade started (mobile-friendly version)');
+    console.log('Music crossfade started (Web Audio version)');
 }
 
 // Clear fog when approaching gatehouse
@@ -205,10 +312,13 @@ function startSoldierWaddle() {
     if (soldiers.length > 0) {
         walkingSoldier = soldiers[0];
         
-        // Start footsteps audio
-        footstepsAudio.play().catch(err => console.log('Footsteps audio error:', err));
+        // Play footsteps with Web Audio
+        audioManager.play('footstepsAudio', {
+            loop: true,
+            volumeCategory: 'dialogueAudio'
+        });
         
-        console.log('Soldier starts waddling to car window with footsteps');
+        console.log('Soldier starts waddling with footsteps (Web Audio)');
     }
 }
 
@@ -553,8 +663,6 @@ function createVideoSystem() {
         video.src = `videos/${filename}`;
         video.preload = 'metadata';
         video.muted = false; // Enable audio playback
-        video.volume = audioLevels.videoAudio; // Set video audio level
-        console.log(`Video ${index + 1} volume set to:`, video.volume);
         video.crossOrigin = 'anonymous';
         video.autoplay = false; // Explicitly prevent autoplay
         video.loop = false;
@@ -589,73 +697,13 @@ function createVideoSystem() {
 
 // Create audio system
 function createAudioSystem() {
-    console.log('Creating audio system with levels:', audioLevels);
+    console.log('Creating Web Audio system...');
     
-    // Load background music
-    backgroundMusic = new Audio('audio/ride-of-the-nazi-soy-boy.mp3');
-    backgroundMusic.loop = true;
-    backgroundMusic.volume = audioLevels.backgroundMusic;
-    backgroundMusic.autoplay = false;
-    console.log('Background music volume set to:', backgroundMusic.volume);
+    // Initialize audio manager
+    audioManager = new AudioManager();
     
-    // Load forest music
-    forestMusic = new Audio('audio/forest.mp3');
-    forestMusic.loop = true;
-    forestMusic.volume = audioLevels.forestMusic;
-    forestMusic.autoplay = false;
-    console.log('Forest music volume set to:', forestMusic.volume);
-    
-    // Load car sound
-    carSound = new Audio('audio/car.mp3');
-    carSound.loop = true;
-    carSound.volume = audioLevels.carSound;
-    carSound.autoplay = false;
-    console.log('Car sound volume set to:', carSound.volume);
-    
-    // Load dialogue audio
-    religionAudio = new Audio('audio/religion.mp3');
-    religionAudio.volume = audioLevels.videoAudio;
-    religionAudio.autoplay = false;
-    
-    catholicAudio = new Audio("audio/i'm-a-catholic.mp3");
-    catholicAudio.volume = audioLevels.videoAudio;
-    catholicAudio.autoplay = false;
-    
-    whatKindAudio = new Audio('audio/what-kind.mp3');
-    whatKindAudio.volume = audioLevels.videoAudio;
-    whatKindAudio.autoplay = false;
-    
-    // Load ending sequence audio
-    wrongAudio = new Audio('audio/wrong.mp3');
-    wrongAudio.volume = audioLevels.videoAudio;
-    wrongAudio.autoplay = false;
-    
-    gunshotAudio = new Audio('audio/gunshot.mp3');
-    gunshotAudio.volume = audioLevels.videoAudio;
-    gunshotAudio.autoplay = false;
-    
-    ringingAudio = new Audio('audio/ringing.mp3');
-    ringingAudio.volume = audioLevels.videoAudio;
-    ringingAudio.autoplay = false;
-    
-    footstepsAudio = new Audio('audio/footsteps.mp3');
-    footstepsAudio.volume = audioLevels.videoAudio;
-    footstepsAudio.loop = true; // Loop while walking
-    footstepsAudio.autoplay = false;
-    
-    // Explicitly pause all one-shot audio files as a safeguard
-    const oneShotAudios = [religionAudio, catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, ringingAudio, footstepsAudio];
-    oneShotAudios.forEach(audio => {
-        if (audio) {
-            audio.pause();
-            audio.currentTime = 0;
-        }
-    });
-    
-    // Background music will start after user interaction (browser requirement)
-    console.log('Background music loaded - will start after user clicks');
-    
-    console.log('Audio system initialized');
+    // The actual loading will happen in startAudioIfNeeded
+    console.log('Audio system initialized - ready to load on user interaction');
 }
 
 // Create gatehouse sprite
@@ -1086,10 +1134,7 @@ function handleInput() {
         camera.position.y = baseHeight + Math.sin(Date.now() * 0.01 * speed) * 0.001; // Much smaller bob
     }
     
-    // Car sound should play continuously once started (not just when moving)
-    if (carSound && carSound.paused && window.audioInitialized) {
-        carSound.play().catch(err => console.log('Car sound play error:', err));
-    }
+    // Car sound is now handled by Web Audio API and plays continuously
 }
 
 // Check proximity to videos and start playback
@@ -1262,8 +1307,7 @@ function updateSoldierWaddle() {
             walkingSoldier.position.y = 2; // Lower since he's leaning down
             
             // Stop footsteps audio
-            footstepsAudio.pause();
-            footstepsAudio.currentTime = 0;
+            audioManager.stop('footstepsAudio');
             
             // Rotate to face into the car (90 degrees to face right toward car)
             walkingSoldier.rotation.y = Math.PI / 2;
@@ -1289,17 +1333,17 @@ function startDialogueSequence() {
     if (dialogueStarted) return;
     dialogueStarted = true;
     
-    // Start mouth animation and play "what's your religion"
     startMouthAnimation();
-    religionAudio.play().catch(err => console.log('Religion audio error:', err));
     
-    // When religion audio ends, show response choices
-    religionAudio.addEventListener('ended', () => {
-        stopMouthAnimation();
-        setTimeout(() => {
-            showReligionChoices();
-        }, 500);
-    }, { once: true });
+    audioManager.play('religionAudio', {
+        volumeCategory: 'dialogueAudio',
+        onEnded: () => {
+            stopMouthAnimation();
+            setTimeout(() => {
+                showReligionChoices();
+            }, 500);
+        }
+    });
 }
 
 // Start mouth animation (toggle between leaning1 and leaning2)
@@ -1414,23 +1458,23 @@ function selectReligionChoice(choice) {
     
     // Play catholic response (same audio for both choices)
     setTimeout(() => {
-        catholicAudio.play().catch(err => console.log('Catholic audio error:', err));
-        
-        // When driver finishes, soldier asks "what kind"
-        catholicAudio.addEventListener('ended', () => {
-            setTimeout(() => {
-                startMouthAnimation();
-                whatKindAudio.play().catch(err => console.log('What kind audio error:', err));
-                
-                // When soldier finishes asking, show denomination list
-                whatKindAudio.addEventListener('ended', () => {
-                    stopMouthAnimation();
-                    setTimeout(() => {
-                        showDenominationList();
-                    }, 500);
-                }, { once: true });
-            }, 300);
-        }, { once: true });
+        audioManager.play('catholicAudio', {
+            volumeCategory: 'dialogueAudio',
+            onEnded: () => {
+                setTimeout(() => {
+                    startMouthAnimation();
+                    audioManager.play('whatKindAudio', {
+                        volumeCategory: 'dialogueAudio',
+                        onEnded: () => {
+                            stopMouthAnimation();
+                            setTimeout(() => {
+                                showDenominationList();
+                            }, 500);
+                        }
+                    });
+                }, 300);
+            }
+        });
     }, 300);
 }
 
@@ -1620,19 +1664,19 @@ function selectDenomination(denomination) {
 // The tragic ending sequence
 function startEndingSequence() {
     // Play "wrong" sound
-    wrongAudio.play().catch(err => console.log('Wrong audio error:', err));
+    audioManager.play('wrongAudio', { volumeCategory: 'dialogueAudio' });
     
     // Transform all soldiers simultaneously
     transformSoldiersToAiming();
     
     setTimeout(() => {
         // Play gunshot with muzzle flash
-        gunshotAudio.play().catch(err => console.log('Gunshot audio error:', err));
+        audioManager.play('gunshotAudio', { volumeCategory: 'dialogueAudio' });
         triggerMuzzleFlash();
         
         setTimeout(() => {
             // Start ringing and screen effects
-            ringingAudio.play().catch(err => console.log('Ringing audio error:', err));
+            audioManager.play('ringingAudio', { volumeCategory: 'dialogueAudio' });
             startScreenTransition();
         }, 500);
     }, 1000);
@@ -1700,28 +1744,20 @@ function startScreenTransition() {
 
 // Fade from ringing back to background music
 function startAudioReset() {
-    // Stop forest music if playing
-    if (forestMusic && !forestMusic.paused) {
-        forestMusic.pause();
-        forestMusic.currentTime = 0;
-    }
+    if (!audioManager) return;
     
-    // Fade out ringing
-    const fadeOut = setInterval(() => {
-        if (ringingAudio.volume > 0.1) {
-            ringingAudio.volume = Math.max(0, ringingAudio.volume - 0.1);
-        } else {
-            ringingAudio.pause();
-            ringingAudio.currentTime = 0;
-            clearInterval(fadeOut);
-        }
-    }, 100);
+    // Stop forest music
+    audioManager.stop('forestMusic');
     
-    // Restart background music
+    // Fade out ringing over 1 second
+    audioManager.fadeOut('ringingAudio', 1, true);
+    
+    // Restart background music after a delay
     setTimeout(() => {
-        backgroundMusic.currentTime = 0;
-        backgroundMusic.volume = audioLevels.backgroundMusic;
-        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+        audioManager.play('backgroundMusic', {
+            loop: true,
+            volumeCategory: 'backgroundMusic'
+        });
     }, 1000);
 }
 
@@ -1782,22 +1818,21 @@ function resetGame() {
     // Restore fog
     scene.fog = new THREE.Fog(0x222222, 30, 120);
     
-    // Reset audio states
-    if (backgroundMusic) {
-        backgroundMusic.currentTime = 0;
-        backgroundMusic.volume = audioLevels.backgroundMusic;
-        backgroundMusic.play().catch(err => console.log('Reset music error:', err));
-    }
-    
-    if (forestMusic) {
-        forestMusic.pause();
-        forestMusic.currentTime = 0;
-        forestMusic.volume = 0;
-    }
-    
-    if (ringingAudio) {
-        ringingAudio.pause();
-        ringingAudio.currentTime = 0;
+    // Reset audio states with Web Audio API
+    if (audioManager) {
+        audioManager.stop('forestMusic');
+        audioManager.stop('ringingAudio');
+        
+        // Restart background music and car sound
+        audioManager.play('backgroundMusic', {
+            loop: true,
+            volumeCategory: 'backgroundMusic'
+        });
+        
+        audioManager.play('carSound', {
+            loop: true,
+            volumeCategory: 'carSound'
+        });
     }
     
     console.log('Game reset to beginning');
