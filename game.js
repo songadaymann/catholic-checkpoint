@@ -48,6 +48,9 @@ let religionAudio, catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, ringi
 // Audio volume controls - adjust these to balance all sounds
 const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
+console.log('Mobile device detected:', isMobileDevice);
+console.log('User Agent:', navigator.userAgent);
+
 const audioLevels = isMobileDevice ? {
     // Mobile audio levels - adjusted for better balance on mobile devices
     backgroundMusic: 0.01,  // Quieter background music on mobile
@@ -56,11 +59,13 @@ const audioLevels = isMobileDevice ? {
     videoAudio: 1         // Louder video dialogue on mobile
 } : {
     // Desktop audio levels
-    backgroundMusic: 0.015,  // Background music volume (0.0 to 1.0)
+    backgroundMusic: 0.02,  // Background music volume (0.0 to 1.0)
     forestMusic: .025,     // Forest music volume for gatehouse scene
     carSound: 0.1,         // Car engine sound volume
     videoAudio: 0.8        // Video dialogue volume
 };
+
+console.log('Audio levels being used:', audioLevels);
 
 // Start audio on first user input
 function startAudioIfNeeded() {
@@ -588,6 +593,7 @@ function createVideoSystem() {
         video.preload = 'metadata';
         video.muted = false; // Enable audio playback
         video.volume = audioLevels.videoAudio; // Set video audio level
+        console.log(`Video ${index + 1} volume set to:`, video.volume);
         video.crossOrigin = 'anonymous';
         video.autoplay = false; // Explicitly prevent autoplay
         video.loop = false;
@@ -622,23 +628,28 @@ function createVideoSystem() {
 
 // Create audio system
 function createAudioSystem() {
+    console.log('Creating audio system with levels:', audioLevels);
+    
     // Load background music
     backgroundMusic = new Audio('audio/ride-of-the-nazi-soy-boy.mp3');
     backgroundMusic.loop = true;
     backgroundMusic.volume = audioLevels.backgroundMusic;
     backgroundMusic.autoplay = false;
+    console.log('Background music volume set to:', backgroundMusic.volume);
     
     // Load forest music
     forestMusic = new Audio('audio/forest.mp3');
     forestMusic.loop = true;
     forestMusic.volume = audioLevels.forestMusic;
     forestMusic.autoplay = false;
+    console.log('Forest music volume set to:', forestMusic.volume);
     
     // Load car sound
     carSound = new Audio('audio/car.mp3');
     carSound.loop = true;
     carSound.volume = audioLevels.carSound;
     carSound.autoplay = false;
+    console.log('Car sound volume set to:', carSound.volume);
     
     // Load dialogue audio
     religionAudio = new Audio('audio/religion.mp3');
