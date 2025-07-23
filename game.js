@@ -11,7 +11,7 @@ let treesData, grassSpritesData;
 let sprites = [];
 let carInterior;
 let speed = 0;
-let maxSpeed = .2; // Much slower for better timing
+let maxSpeed = .105; // Much slower for better timing
 let gameStartTime = 0;
 let isAutoDriving = false; // Track if we're in auto-drive mode
 let crossfadeStarted = false; // Track if music crossfade has started
@@ -51,11 +51,51 @@ const audioLevels = {
 
 // Start audio on first user input
 function startAudioIfNeeded() {
-    if (backgroundMusic && backgroundMusic.paused) {
-        backgroundMusic.play().catch(err => console.log('Music play error:', err));
-    }
-    if (carSound && carSound.paused) {
-        carSound.play().catch(err => console.log('Car sound error:', err));
+    // Enable all audio files for mobile by playing then pausing
+    const audioFiles = [
+        backgroundMusic, forestMusic, carSound, religionAudio, 
+        catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, 
+        ringingAudio, footstepsAudio
+    ];
+    
+    audioFiles.forEach(audio => {
+        if (audio && audio.paused) {
+            audio.play().then(() => {
+                // Only pause if it's not background music or car sound (they should keep playing)
+                if (audio !== backgroundMusic && audio !== carSound) {
+                    audio.pause();
+                    audio.currentTime = 0;
+                }
+            }).catch(err => console.log('Audio enable error:', err));
+        }
+    });
+    
+    // Enable all video elements for mobile only
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+        console.log('Mobile detected - attempting to enable', videos.length, 'videos...');
+        videos.forEach((video, index) => {
+            if (video && video.paused) {
+                console.log(`Enabling video ${index + 1}:`, video.src);
+                video.play().then(() => {
+                    console.log(`Video ${index + 1} enabled successfully`);
+                    video.pause();
+                    video.currentTime = 0;
+                }).catch(err => {
+                    console.error(`Video ${index + 1} enable error:`, err);
+                    // Try with muted for stricter mobile browsers
+                    video.muted = true;
+                    video.play().then(() => {
+                        console.log(`Video ${index + 1} enabled with mute`);   
+                        video.pause();
+                        video.currentTime = 0;
+                        video.muted = false; // Restore audio for later
+                    }).catch(err2 => console.error(`Video ${index + 1} muted enable error:`, err2));
+                });
+            }
+        });
+    } else {
+        console.log('Desktop detected - skipping video pre-enable');
     }
 }
 
@@ -944,6 +984,11 @@ function handleInput() {
 function checkVideoProximity() {
     const playerZ = player.position.z;
     
+    // Debug log occasionally (every ~60 frames at 60fps = ~1 second)
+    if (Math.floor(Date.now() / 1000) % 5 === 0 && Date.now() % 1000 < 16) {
+        console.log(`Player Z: ${playerZ.toFixed(1)}, checking ${videos.length} videos`);
+    }
+    
     videos.forEach((video, index) => {
         const videoZ = videoPositions[index];
         const distance = Math.abs(playerZ - videoZ);
@@ -987,11 +1032,13 @@ function checkVideoProximity() {
                 });
                 
                 // Start playing
-                video.play().catch(err => {
+                console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
+                video.play().then(() => {
+                    console.log(`Video ${index + 1} started playing successfully`);
+                }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
+                    console.log(`Video ${index + 1} readyState:`, video.readyState, 'networkState:', video.networkState);
                 });
-                
-                console.log(`Started playing video ${index + 1} at distance ${distance.toFixed(2)}`);
             }
         } else {
             // Don't pause videos when driving away - let them play to completion once started
@@ -1583,6 +1630,9 @@ function resetVideoSystem() {
     
     // Recreate video system with new pattern
     createVideoSystem();
+    
+    // Re-enable videos for continued playback (important for subsequent loops)
+    startAudioIfNeeded();
     
     console.log('Video system reset and recreated for new playthrough pattern');
 }
