@@ -46,11 +46,20 @@ let carSound;
 let religionAudio, catholicAudio, whatKindAudio, wrongAudio, gunshotAudio, ringingAudio, footstepsAudio;
 
 // Audio volume controls - adjust these to balance all sounds
-const audioLevels = {
+const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+const audioLevels = isMobileDevice ? {
+    // Mobile audio levels - adjusted for better balance on mobile devices
+    backgroundMusic: 0.015,  // Quieter background music on mobile
+    forestMusic: 0.025,     // Quieter forest music on mobile
+    carSound: 0.1,          // Quieter car sound on mobile
+    videoAudio: 0.8         // Louder video dialogue on mobile
+} : {
+    // Desktop audio levels
     backgroundMusic: 0.03,  // Background music volume (0.0 to 1.0)
     forestMusic: 0.05,     // Forest music volume for gatehouse scene
     carSound: 0.2,         // Car engine sound volume
-    videoAudio: .6      // Video dialogue volume
+    videoAudio: 0.6        // Video dialogue volume
 };
 
 // Start audio on first user input
@@ -103,10 +112,18 @@ function startAudioIfNeeded() {
         videos.forEach((video, index) => {
             if (video && video.paused) {
                 console.log(`Enabling video ${index + 1}:`, video.src);
+                // Mute and set volume to 0 before playing to prevent audio glitches
+                const originalVolume = video.volume;
+                video.muted = true;
+                video.volume = 0;
+                
                 video.play().then(() => {
                     console.log(`Video ${index + 1} enabled successfully`);
                     video.pause();
                     video.currentTime = 0;
+                    // Restore original settings
+                    video.muted = false;
+                    video.volume = originalVolume;
                     
                     // Restart background music if it was interrupted
                     if (musicWasPlaying && backgroundMusic.paused) {
@@ -114,18 +131,16 @@ function startAudioIfNeeded() {
                     }
                 }).catch(err => {
                     console.error(`Video ${index + 1} enable error:`, err);
-                    video.muted = true;
-                    video.play().then(() => {
-                        console.log(`Video ${index + 1} enabled with mute`);   
-                        video.pause();
-                        video.currentTime = 0;
-                        video.muted = false;
-                        
-                        // Restart background music if it was interrupted
-                        if (musicWasPlaying && backgroundMusic.paused) {
-                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                        }
-                    }).catch(err2 => console.error(`Video ${index + 1} muted enable error:`, err2));
+                    // Keep muted if error
+                    video.pause();
+                    video.currentTime = 0;
+                    video.muted = false;
+                    video.volume = originalVolume;
+                    
+                    // Restart background music if it was interrupted
+                    if (musicWasPlaying && backgroundMusic.paused) {
+                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
+                    }
                 });
             }
         });
@@ -144,28 +159,35 @@ function startMusicCrossfade() {
     forestMusic.volume = 0;
     forestMusic.play().catch(err => console.log('Forest music error:', err));
     
-    // Long crossfade over ~20 seconds (from Z=-200 to Z=-220)
-    const fadeInterval = setInterval(() => {
-        // Fade out background music gradually
-        if (backgroundMusic.volume > 0.002) {
-            backgroundMusic.volume = Math.max(0, backgroundMusic.volume - 0.002);
+    const startTime = Date.now();
+    const fadeDuration = 20000; // 20 seconds fade
+    const startBgVolume = backgroundMusic.volume;
+    const targetForestVolume = audioLevels.forestMusic;
+    
+    function doFade() {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / fadeDuration, 1);
+        
+        // Fade out background music
+        backgroundMusic.volume = Math.max(0, startBgVolume * (1 - progress));
+        
+        // Fade in forest music
+        forestMusic.volume = Math.min(targetForestVolume, targetForestVolume * progress);
+        
+        if (progress < 1) {
+            requestAnimationFrame(doFade);
         } else {
+            // Crossfade complete
             backgroundMusic.volume = 0;
             backgroundMusic.pause();
+            forestMusic.volume = targetForestVolume;
+            console.log('Music crossfade completed');
         }
-        
-        // Fade in forest music gradually
-        if (forestMusic.volume < audioLevels.forestMusic) {
-            forestMusic.volume = Math.min(audioLevels.forestMusic, forestMusic.volume + 0.003);
-        }
-        
-        // Stop when crossfade is complete
-        if (backgroundMusic.volume <= 0 && forestMusic.volume >= audioLevels.forestMusic) {
-            clearInterval(fadeInterval);
-        }
-    }, 200); // Slower interval for longer fade
+    }
     
-    console.log('Music crossfade started (long version)');
+    requestAnimationFrame(doFade);
+    
+    console.log('Music crossfade started (mobile-friendly version)');
 }
 
 // Clear fog when approaching gatehouse
@@ -1083,25 +1105,70 @@ function checkVideoProximity() {
                 const texture = new THREE.VideoTexture(video);
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
+                texture.format = THREE.RGBAFormat;
                 
                 // Mobile-specific handling for transparency
                 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                
+                // Create material with chroma key shader for mobile
+                let material;
                 if (isMobile) {
-                    // Use RGB format on mobile as alpha channel may not work properly
-                    texture.format = THREE.RGBFormat;
-                    // Ensure video element preserves alpha if supported
-                    video.setAttribute('playsinline', '');
-                    video.setAttribute('webkit-playsinline', '');
+                    // Use an improved shader for mobile that handles transparency better
+                    material = new THREE.ShaderMaterial({
+                        uniforms: {
+                            map: { value: texture },
+                            alphaThreshold: { value: 0.5 }, // Alpha cutoff
+                            chromaKey: { value: new THREE.Color(0x000000) }, // Black background
+                            chromaThreshold: { value: 0.4 }, // How close to black
+                            chromaSmooth: { value: 0.2 } // Smoothing for edges
+                        },
+                        vertexShader: `
+                            varying vec2 vUv;
+                            void main() {
+                                vUv = uv;
+                                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                            }
+                        `,
+                        fragmentShader: `
+                            uniform sampler2D map;
+                            uniform float alphaThreshold;
+                            uniform vec3 chromaKey;
+                            uniform float chromaThreshold;
+                            uniform float chromaSmooth;
+                            varying vec2 vUv;
+                            
+                            void main() {
+                                vec4 color = texture2D(map, vUv);
+                                
+                                // Check if pixel is close to black
+                                float chromaDiff = length(color.rgb - chromaKey);
+                                float chromaAlpha = smoothstep(chromaThreshold - chromaSmooth, chromaThreshold + chromaSmooth, chromaDiff);
+                                
+                                // Also respect the actual alpha channel if present
+                                float finalAlpha = min(chromaAlpha, color.a);
+                                
+                                // Apply alpha threshold to clean up edges
+                                finalAlpha = finalAlpha < alphaThreshold ? 0.0 : finalAlpha;
+                                
+                                gl_FragColor = vec4(color.rgb, finalAlpha);
+                            }
+                        `,
+                        transparent: true,
+                        side: THREE.DoubleSide
+                    });
                 } else {
-                    texture.format = THREE.RGBAFormat;
+                    // Desktop uses standard material with alpha
+                    material = new THREE.MeshBasicMaterial({
+                        map: texture,
+                        transparent: true,
+                        side: THREE.DoubleSide,
+                        alphaTest: 0.1
+                    });
                 }
                 
-                // Update material with video texture - ensure transparency is properly set
-                videoSprites[index].material.map = texture;
-                videoSprites[index].material.transparent = true;
-                videoSprites[index].material.opacity = 1; // Make visible
-                videoSprites[index].material.alphaTest = 0.1; // Add alpha test for better transparency handling
-                videoSprites[index].material.needsUpdate = true;
+                // Replace the material
+                videoSprites[index].material.dispose();
+                videoSprites[index].material = material;
                 
                 // Add event listener to mark as played when finished
                 video.addEventListener('ended', () => {
@@ -1817,36 +1884,68 @@ function setupControls() {
     // Touch controls for mobile looking around
     let touchStartX = 0;
     let touchCurrentX = 0;
+    let lookTouchId = null; // Track which touch is for looking
     
     canvas.addEventListener('touchstart', (event) => {
-        if (event.touches.length === 1) {
-            touchStartX = event.touches[0].clientX;
-            touchCurrentX = touchStartX;
+        // Don't prevent default to allow other touches to work
+        // Find a touch that's not on the drive button
+        for (let i = 0; i < event.touches.length; i++) {
+            const touch = event.touches[i];
+            const touchTarget = document.elementFromPoint(touch.clientX, touch.clientY);
+            
+            // If this touch is not on the drive button, use it for looking
+            if (touchTarget !== document.getElementById('mobile-drive-button') && lookTouchId === null) {
+                lookTouchId = touch.identifier;
+                touchStartX = touch.clientX;
+                touchCurrentX = touchStartX;
+                break;
+            }
         }
     });
     
     canvas.addEventListener('touchmove', (event) => {
-        event.preventDefault(); // Prevent scrolling
-        if (event.touches.length === 1) {
-            touchCurrentX = event.touches[0].clientX;
-            const deltaX = (touchCurrentX - touchStartX) * 0.005;
+        // Only prevent default for the look touch
+        if (lookTouchId !== null) {
+            event.preventDefault(); // Prevent scrolling
             
-            // Update mouse.x for looking around
-            mouse.x = deltaX;
-            
-            // Limit horizontal look range
-            const maxLook = Math.PI / 3; // 60 degrees each way
-            mouse.x = Math.max(-maxLook, Math.min(maxLook, mouse.x));
-            
-            // Apply horizontal rotation to camera
-            camera.rotation.order = 'YXZ';
-            camera.rotation.y = -mouse.x;
-            camera.rotation.x = 0; // Lock vertical look
+            // Find our look touch
+            for (let i = 0; i < event.touches.length; i++) {
+                const touch = event.touches[i];
+                if (touch.identifier === lookTouchId) {
+                    touchCurrentX = touch.clientX;
+                    const deltaX = (touchCurrentX - touchStartX) * 0.005;
+                    
+                    // Update mouse.x for looking around
+                    mouse.x = deltaX;
+                    
+                    // Limit horizontal look range
+                    const maxLook = Math.PI / 3; // 60 degrees each way
+                    mouse.x = Math.max(-maxLook, Math.min(maxLook, mouse.x));
+                    
+                    // Apply horizontal rotation to camera
+                    camera.rotation.order = 'YXZ';
+                    camera.rotation.y = -mouse.x;
+                    camera.rotation.x = 0; // Lock vertical look
+                    break;
+                }
+            }
         }
     }, { passive: false });
     
     canvas.addEventListener('touchend', (event) => {
-        // Keep current look position when touch ends
+        // Check if our look touch ended
+        let lookTouchStillActive = false;
+        for (let i = 0; i < event.touches.length; i++) {
+            if (event.touches[i].identifier === lookTouchId) {
+                lookTouchStillActive = true;
+                break;
+            }
+        }
+        
+        // If our look touch is no longer active, reset it
+        if (!lookTouchStillActive) {
+            lookTouchId = null;
+        }
     });
 }
 
