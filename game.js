@@ -53,10 +53,10 @@ console.log('User Agent:', navigator.userAgent);
 
 const audioLevels = isMobileDevice ? {
     // Mobile audio levels - adjusted for better balance on mobile devices
-    backgroundMusic: 0.01,  // Quieter background music on mobile
-    forestMusic: 0.015,     // Quieter forest music on mobile
-    carSound: 0.1,          // Quieter car sound on mobile
-    videoAudio: 1         // Louder video dialogue on mobile
+    backgroundMusic: 0.015,  // Slightly quieter background music on mobile
+    forestMusic: 0.02,      // Slightly quieter forest music on mobile
+    carSound: 0.05,         // Much quieter car sound on mobile
+    videoAudio: 0.9         // Slightly louder video dialogue on mobile
 } : {
     // Desktop audio levels
     backgroundMusic: 0.02,  // Background music volume (0.0 to 1.0)
@@ -65,7 +65,7 @@ const audioLevels = isMobileDevice ? {
     videoAudio: 0.8        // Video dialogue volume
 };
 
-console.log('Audio levels being used:', audioLevels);
+console.log('Audio levels being used:', JSON.stringify(audioLevels, null, 2));
 
 // Start audio on first user input
 function startAudioIfNeeded() {
@@ -130,54 +130,15 @@ function startAudioIfNeeded() {
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     if (isMobile && !window.videosInitialized) {
         window.videosInitialized = true;
-        console.log('Mobile detected - attempting to enable', videos.length, 'videos...');
-        
-        // Ensure background music stays playing during video initialization
-        const musicWasPlaying = backgroundMusic && !backgroundMusic.paused;
+        console.log('Mobile detected - setting video preload attributes for', videos.length, 'videos...');
         
         videos.forEach((video, index) => {
-            if (video && video.paused) {
-                console.log(`Enabling video ${index + 1}:`, video.src);
-                // Mute and set volume to 0 before playing to prevent audio glitches
-                const originalVolume = video.volume;
-                video.muted = true;
-                video.volume = 0;
-                
-                // Use immediate pause approach
-                const initPromise = video.play();
-                
-                // Immediately pause - don't wait for promise
-                video.pause();
-                video.currentTime = 0;
-                
-                // Handle the promise
-                if (initPromise && initPromise.then) {
-                    initPromise.then(() => {
-                        console.log(`Video ${index + 1} enabled successfully`);
-                        // Restore original settings
-                        video.muted = false;
-                        video.volume = originalVolume;
-                        
-                        // Restart background music if it was interrupted
-                        if (musicWasPlaying && backgroundMusic.paused) {
-                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                        }
-                    }).catch(err => {
-                        console.error(`Video ${index + 1} enable error:`, err);
-                        // Restore settings even on error
-                        video.muted = false;
-                        video.volume = originalVolume;
-                        
-                        // Restart background music if it was interrupted
-                        if (musicWasPlaying && backgroundMusic.paused) {
-                            backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                        }
-                    });
-                } else {
-                    // No promise returned
-                    video.muted = false;
-                    video.volume = originalVolume;
-                }
+            if (video) {
+                // On mobile, just ensure videos are ready to play
+                video.preload = 'auto'; // Preload video data
+                video.muted = false; // Allow audio
+                video.volume = audioLevels.videoAudio; // Set proper volume
+                console.log(`Video ${index + 1} preload set to auto`);
             }
         });
     } else if (!isMobile) {
@@ -909,7 +870,7 @@ function showInstructions() {
         
         driveButton.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            e.stopPropagation();
+            // Don't stop propagation - allow other touches to work
             if (!isDriving) {
                 isDriving = true;
                 keys['KeyW'] = true; // Use KeyW which the movement code checks for
@@ -920,7 +881,7 @@ function showInstructions() {
         
         driveButton.addEventListener('touchend', (e) => {
             e.preventDefault();
-            e.stopPropagation();
+            // Don't stop propagation - allow other touches to work
             isDriving = false;
             keys['KeyW'] = false;
             keys['ArrowUp'] = false;
@@ -929,7 +890,7 @@ function showInstructions() {
         
         driveButton.addEventListener('touchcancel', (e) => {
             e.preventDefault();
-            e.stopPropagation();
+            // Don't stop propagation - allow other touches to work
             isDriving = false;
             keys['KeyW'] = false;
             keys['ArrowUp'] = false;
@@ -1244,13 +1205,7 @@ function checkVideoProximity() {
                 console.log(`Attempting to play video ${index + 1} at distance ${distance.toFixed(2)}`);
                 video.play().then(() => {
                     console.log(`Video ${index + 1} started playing successfully`);
-                    
-                    // Ensure background music continues on mobile
-                    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-                    if (isMobile && backgroundMusic && backgroundMusic.paused && !crossfadeStarted) {
-                        console.log('Restarting background music after video start');
-                        backgroundMusic.play().catch(err => console.log('Background music restart error:', err));
-                    }
+                    // Background music should already be playing continuously - don't restart it
                 }).catch(err => {
                     console.error(`Error playing video ${index + 1}:`, err);
                     console.log(`Video ${index + 1} readyState:`, video.readyState, 'networkState:', video.networkState);
